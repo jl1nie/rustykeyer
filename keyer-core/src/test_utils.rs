@@ -87,7 +87,7 @@ pub mod virtual_time {
 pub mod paddle_simulator {
     //! Paddle input simulation for testing
     
-    use crate::types::{Element, PaddleSide};
+    use crate::types::PaddleSide;
     use crate::controller::PaddleInput;
     use embassy_time::Duration;
     use heapless::{Vec, String};
@@ -371,7 +371,7 @@ pub mod test_scenarios {
     //! Common test scenarios
     
     use super::paddle_simulator::{PaddlePattern, PaddleEvent};
-    use crate::types::{Element, KeyerMode, PaddleSide};
+    use crate::types::{KeyerMode, PaddleSide};
     use embassy_time::Duration;
     use heapless::{Vec, String};
     

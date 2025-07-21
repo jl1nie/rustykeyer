@@ -1,6 +1,6 @@
 //! Paddle input and SuperKeyer controller implementations
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::hal::Instant;
 use crate::types::{Element, PaddleSide};
 
@@ -9,8 +9,8 @@ use crate::types::{Element, PaddleSide};
 pub struct PaddleInput {
     dit_pressed: AtomicBool,
     dah_pressed: AtomicBool,
-    dit_last_edge: AtomicU64,
-    dah_last_edge: AtomicU64,
+    dit_last_edge: AtomicU32,
+    dah_last_edge: AtomicU32,
 }
 
 impl PaddleInput {
@@ -19,8 +19,8 @@ impl PaddleInput {
         Self {
             dit_pressed: AtomicBool::new(false),
             dah_pressed: AtomicBool::new(false),
-            dit_last_edge: AtomicU64::new(0),
-            dah_last_edge: AtomicU64::new(0),
+            dit_last_edge: AtomicU32::new(0),
+            dah_last_edge: AtomicU32::new(0),
         }
     }
 
@@ -28,8 +28,8 @@ impl PaddleInput {
     /// 
     /// # Safety
     /// This function is safe to call from interrupt context
-    pub fn update(&self, side: PaddleSide, state: bool, debounce_ms: u64) {
-        let now = Instant::now().as_millis() as u64;
+    pub fn update(&self, side: PaddleSide, state: bool, debounce_ms: u32) {
+        let now = Instant::now().as_millis() as u32;
         
         match side {
             PaddleSide::Dit => {
@@ -70,7 +70,7 @@ impl PaddleInput {
     }
 
     /// Get press times for priority determination
-    pub fn get_press_times(&self) -> (Option<u64>, Option<u64>) {
+    pub fn get_press_times(&self) -> (Option<u32>, Option<u32>) {
         let dit_time = if self.dit() {
             Some(self.dit_last_edge.load(Ordering::Relaxed))
         } else {
@@ -260,14 +260,15 @@ mod tests {
         assert!(paddle.both_released());
         assert!(!paddle.both_pressed());
         
-        // Press Dit
-        paddle.update(PaddleSide::Dit, true, 10);
+        // Press Dit - use current time in millis
+        let now_ms = 10u64;
+        paddle.update(PaddleSide::Dit, true, now_ms);
         assert!(paddle.dit());
         assert!(!paddle.dah());
         assert_eq!(paddle.current_single_element(), Some(Element::Dit));
         
         // Press Dah (squeeze)
-        paddle.update(PaddleSide::Dah, true, 10);
+        paddle.update(PaddleSide::Dah, true, now_ms + 5);
         assert!(paddle.dit());
         assert!(paddle.dah());
         assert!(paddle.both_pressed());

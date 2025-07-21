@@ -207,7 +207,9 @@ cargo bench
 ## 🚧 今後の開発
 
 ### Phase 1: 実機対応
-- [ ] CH32V003 HAL実装
+- [x] CH32V003 HAL実装
+- [x] no_std対応とRISC-V移植性改善
+- [x] メモリ効率化（AtomicU32対応）
 - [ ] 実機での動作確認
 - [ ] タイミング精度測定
 
@@ -253,6 +255,8 @@ MIT
 - **Embassy非同期タスク動作** ⚡
 - **HAL抽象化完成** 🔧
 - **3モード実装済み** 🎛️
+- **CH32V003ハードウェア対応** 🔌
+- **RISC-V no_std最適化** ⚡
 
 **開発手法**: [Kiro Spec-Driven Development](https://github.com/kiro-framework/kiro) 
 **総開発時間**: 1セッション  

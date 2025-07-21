@@ -5,21 +5,30 @@ edition = "2021"
 description = "CH32V003 iambic keyer firmware"
 
 [dependencies]
-keyer-core = { path = "../keyer-core" }
-embassy-executor = { workspace = true, features = ["arch-std", "executor-thread"] }
-embassy-time = { workspace = true, features = ["defmt"] }
+keyer-core = { path = "../keyer-core", features = ["embassy-time"] }
+embassy-executor = { workspace = true, features = ["arch-riscv32", "executor-thread"] }
+embassy-time = { workspace = true, features = ["tick-hz-32_768", "generic-queue"] }
 embassy-sync = "0.6"
 embedded-hal = { workspace = true }
 heapless = { workspace = true }
-defmt = { workspace = true }
-defmt-rtt = "0.4"
-cortex-m = { workspace = true }
-cortex-m-rt = { workspace = true }
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+defmt = { workspace = true, optional = true }
+defmt-rtt = { version = "0.4", optional = true }
+riscv = "0.10"
+riscv-rt = "0.11"
+panic-probe = { version = "0.3", features = ["print-defmt"], optional = true }
+panic-halt = "0.2"
 static_cell = "2.1"
+portable-atomic = { version = "1.0", features = ["unsafe-assume-single-core"] }
+critical-section = { version = "1.1", features = ["restore-state-u8"] }
+embassy-time-driver = "0.1"
 
 # CH32V HAL (placeholder - adjust based on actual HAL crate)
 # ch32v0-hal = { version = "0.1", features = ["ch32v003", "rt"] }
+
+[features]
+default = []
+defmt = ["dep:defmt", "defmt-rtt", "panic-probe"]
+embedded = ["defmt"]
 
 [lib]
 name = "rustykeyer_firmware"

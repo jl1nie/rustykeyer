@@ -1,8 +1,17 @@
-// Temporarily enable std for compilation testing
-// Will be changed to #![no_std] #![no_main] for actual embedded target
+#![no_std]
+#![no_main]
 
+#[cfg(feature = "defmt")]
 use defmt_rtt as _;
+#[cfg(feature = "defmt")]
 use panic_probe as _;
+
+// RISC-V runtime
+use riscv_rt as _;
+
+// Panic handler
+#[cfg(not(feature = "defmt"))]
+use panic_halt as _;
 
 use embassy_executor::Spawner;
 use embassy_time::Duration;
@@ -19,10 +28,12 @@ static KEY_QUEUE: StaticCell<Queue<Element, 64>> = StaticCell::new();
 /// Main firmware entry point
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    #[cfg(feature = "defmt")]
     defmt::info!("🔧 Rusty Keyer Firmware Starting...");
 
     // Initialize hardware (placeholder for now)
     let _hal = init_hardware().await;
+    #[cfg(feature = "defmt")]
     defmt::info!("✅ Hardware initialized");
 
     // Initialize keyer configuration
@@ -33,6 +44,7 @@ async fn main(spawner: Spawner) {
         debounce_ms: 10,
         queue_size: 64,
     };
+    #[cfg(feature = "defmt")]
     defmt::info!("⚙️ Keyer config: {:?} WPM, Mode: {:?}", 
                 config.wpm(), config.mode);
 
@@ -41,22 +53,26 @@ async fn main(spawner: Spawner) {
     let (producer, consumer) = queue.split();
 
     // Spawn keyer tasks
+    #[cfg(feature = "defmt")]
     defmt::info!("🚀 Spawning keyer tasks...");
     
     spawner.must_spawn(evaluator_task_wrapper(&PADDLE, producer, config));
     spawner.must_spawn(sender_task(consumer, config.unit));
 
+    #[cfg(feature = "defmt")]
     defmt::info!("✨ Keyer firmware ready!");
 
     // Main supervision loop
     loop {
         embassy_time::Timer::after(Duration::from_secs(1)).await;
+        #[cfg(feature = "defmt")]
         defmt::trace!("💓 Heartbeat");
     }
 }
 
 /// Initialize hardware abstraction layer
 async fn init_hardware() -> MockKeyerHal {
+    #[cfg(feature = "defmt")]
     defmt::info!("🔌 Initializing hardware...");
     
     // For now, use mock hardware for compilation
@@ -71,18 +87,20 @@ async fn sender_task(
     mut consumer: heapless::spsc::Consumer<'static, Element, 64>,
     unit: Duration,
 ) {
+    #[cfg(feature = "defmt")]
     defmt::info!("📤 Sender task started");
     let mut key_output = MockKeyOutput::new();
 
     loop {
         if let Some(element) = consumer.dequeue() {
-            let (on_time, element_name) = match element {
+            let (on_time, _element_name) = match element {
                 Element::Dit => (unit, "Dit"),
                 Element::Dah => (unit * 3, "Dah"),
                 Element::CharSpace => (Duration::from_millis(0), "Space"),
             };
 
             if element.is_keyed() {
+                #[cfg(feature = "defmt")]
                 defmt::debug!("📡 Sending {}", element_name);
                 
                 // Key down
@@ -96,6 +114,7 @@ async fn sender_task(
                 embassy_time::Timer::after(unit).await;
             } else {
                 // Character space - just wait
+                #[cfg(feature = "defmt")]
                 defmt::debug!("⏸️ Character space");
                 embassy_time::Timer::after(unit * 3).await;
             }
