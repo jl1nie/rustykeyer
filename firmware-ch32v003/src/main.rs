@@ -109,6 +109,18 @@ const SYSTICK_CVR: u32 = 0x08;  // Current Value Register
 /// System tick counter for timing (updated by SysTick interrupt)
 static SYSTEM_TICK_MS: AtomicU32 = AtomicU32::new(0);
 
+/// System event flags for power-efficient operation
+static SYSTEM_EVENTS: AtomicU32 = AtomicU32::new(0);
+const EVENT_PADDLE: u32 = 0x01;      // Paddle state changed
+const EVENT_TIMER: u32 = 0x02;       // Timer event
+const EVENT_QUEUE: u32 = 0x04;       // Queue needs processing
+
+/// System operational state
+static SYSTEM_STATE: AtomicU32 = AtomicU32::new(0);
+const STATE_IDLE: u32 = 0;           // Idle, waiting for events
+const STATE_ACTIVE: u32 = 1;         // Processing paddle input
+const STATE_SENDING: u32 = 2;        // Sending element
+
 /// Paddle state is managed locally in main loop for simplicity
 
 /// Element queue for FSM communication
@@ -360,31 +372,58 @@ fn main() -> ! {
     
     info!("🚀 Keyer system ready!");
     
-    // Main application loop
+    // Main application loop - Event Driven Architecture
     let mut last_heartbeat = get_current_instant();
+    let mut last_fsm_update = get_current_instant();
     
     loop {
-        // Update FSM with current paddle state
-        critical_section::with(|_| {
-            // Read current paddle state safely
-            let dit_pressed = DIT_INPUT.is_low();
-            let dah_pressed = DAH_INPUT.is_low();
-            
-            // Create temporary paddle state for FSM
-            let current_paddle = PaddleInput::new();
-            let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-            
-            // Update paddle state based on current GPIO readings
-            current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
-            current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
-            
-            // Update FSM
-            fsm.update(&current_paddle, &mut producer);
-        });
+        // Check for events
+        let events = SYSTEM_EVENTS.load(Ordering::Acquire);
         
-        // Process output queue
-        if let Some(element) = consumer.dequeue() {
-            process_element(element, keyer_config.unit);
+        if events != 0 {
+            // Clear processed events
+            SYSTEM_EVENTS.fetch_and(!events, Ordering::Release);
+            
+            // Handle paddle events or periodic FSM update
+            if events & EVENT_PADDLE != 0 || 
+               get_current_instant().duration_since(last_fsm_update).as_millis() >= 10 {
+                
+                critical_section::with(|_| {
+                    // Read current paddle state safely
+                    let dit_pressed = DIT_INPUT.is_low();
+                    let dah_pressed = DAH_INPUT.is_low();
+                    
+                    // Create temporary paddle state for FSM
+                    let current_paddle = PaddleInput::new();
+                    let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+                    
+                    // Update paddle state based on current GPIO readings
+                    current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
+                    current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
+                    
+                    // Update FSM
+                    fsm.update(&current_paddle, &mut producer);
+                    
+                    // Check if queue has elements after FSM update
+                    if consumer.ready() {
+                        SYSTEM_EVENTS.fetch_or(EVENT_QUEUE, Ordering::Release);
+                    }
+                });
+                
+                last_fsm_update = get_current_instant();
+            }
+        }
+        
+        // Process output queue with low power
+        if consumer.ready() {
+            if let Some(element) = consumer.dequeue() {
+                process_element_low_power(element, keyer_config.unit);
+                
+                // Check for more elements
+                if consumer.ready() {
+                    SYSTEM_EVENTS.fetch_or(EVENT_QUEUE, Ordering::Release);
+                }
+            }
         }
         
         // Heartbeat every 10 seconds
@@ -394,7 +433,7 @@ fn main() -> ! {
             last_heartbeat = now;
         }
         
-        // Brief CPU pause (RISC-V version)
+        // Sleep until next event
         unsafe { riscv::asm::wfi(); }
     }
 }
@@ -413,6 +452,26 @@ fn process_element(element: Element, unit: Duration) {
         Element::CharSpace => {
             debug!("⏸️ Character space");
             delay_ms(unit.as_millis() as u32 * 3);
+        }
+    }
+}
+
+/// Process a single element from the queue with low power
+fn process_element_low_power(element: Element, unit: Duration) {
+    match element {
+        Element::Dit => {
+            debug!("📡 Sending Dit");
+            send_element_low_power(unit, unit);
+        }
+        Element::Dah => {
+            debug!("📡 Sending Dah");
+            send_element_low_power(unit * 3, unit);
+        }
+        Element::CharSpace => {
+            debug!("⏸️ Character space");
+            SYSTEM_STATE.store(STATE_SENDING, Ordering::Release);
+            delay_ms_low_power(unit.as_millis() as u32 * 3);
+            SYSTEM_STATE.store(STATE_IDLE, Ordering::Release);
         }
     }
 }
@@ -436,12 +495,46 @@ fn send_element(duration: Duration) {
     delay_ms(60); // 1 unit at 20 WPM
 }
 
+/// Send a keyed element with low-power timing
+fn send_element_low_power(duration: Duration, unit: Duration) {
+    // Set sending state
+    SYSTEM_STATE.store(STATE_SENDING, Ordering::Release);
+    
+    // Key down
+    KEY_OUTPUT.set_high();
+    STATUS_LED.set_high();
+    SIDETONE_PWM.set_duty(500);
+    
+    // Element duration (low power wait)
+    delay_ms_low_power(duration.as_millis() as u32);
+    
+    // Key up
+    KEY_OUTPUT.set_low();
+    STATUS_LED.set_low();
+    SIDETONE_PWM.set_duty(0);
+    
+    // Inter-element space (1 unit) with low power wait
+    delay_ms_low_power(unit.as_millis() as u32);
+    
+    // Clear sending state
+    SYSTEM_STATE.store(STATE_IDLE, Ordering::Release);
+}
+
 /// Simple delay implementation using system tick
 fn delay_ms(ms: u32) {
     let start = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     while SYSTEM_TICK_MS.load(Ordering::Relaxed).saturating_sub(start) < ms {
         // RISC-V nop
         unsafe { riscv::asm::nop(); }
+    }
+}
+
+/// Low-power delay implementation using WFI
+fn delay_ms_low_power(ms: u32) {
+    let target = SYSTEM_TICK_MS.load(Ordering::Relaxed).saturating_add(ms);
+    while SYSTEM_TICK_MS.load(Ordering::Relaxed) < target {
+        // Sleep until next interrupt (SysTick or other)
+        unsafe { riscv::asm::wfi(); }
     }
 }
 
@@ -479,10 +572,15 @@ fn enable_peripheral_clocks() {
 
 /// Configure GPIO pins for inputs and outputs
 fn configure_gpio_pins() {
+    // Configure PA1 as AF push-pull output for TIM1_CH1 (PWM)
     // Configure PA2 and PA3 as inputs with pull-up (Dit/Dah paddles)
     unsafe {
         let gpioa_crl = (GPIOA_BASE + GPIO_CRL) as *mut u32;
         let mut crl = core::ptr::read_volatile(gpioa_crl);
+        
+        // PA1: CNF=10 (AF push-pull), MODE=11 (50MHz output)
+        crl &= !(0xF << (1 * 4)); // Clear PA1 configuration
+        crl |= 0xB << (1 * 4);    // Set PA1 as AF push-pull 50MHz
         
         // PA2: CNF=10 (input with pull-up), MODE=00 (input)
         crl &= !(0xF << (2 * 4)); // Clear PA2 configuration
@@ -551,6 +649,12 @@ fn configure_exti_interrupts() {
         
         let ftsr = core::ptr::read_volatile(exti_ftsr);
         core::ptr::write_volatile(exti_ftsr, ftsr | (1 << 2) | (1 << 3)); // Falling edge trigger
+        
+        // Enable NVIC for EXTI7_0 interrupt (covers EXTI0-7)
+        // CH32V003 NVIC ISER register for interrupt 30 (EXTI7_0)
+        let nvic_iser = (NVIC_BASE + 0x100) as *mut u32;
+        let iser = core::ptr::read_volatile(nvic_iser);
+        core::ptr::write_volatile(nvic_iser, iser | (1 << 30)); // Enable interrupt 30
     }
 }
 
@@ -572,17 +676,20 @@ fn configure_pwm_sidetone() {
         
         // Configure PWM mode 1 on Channel 1
         let tim_ccmr1 = (TIM1_BASE + TIM_CCMR1) as *mut u32;
-        let ccmr1 = core::ptr::read_volatile(tim_ccmr1);
-        core::ptr::write_volatile(tim_ccmr1, ccmr1 | (0x6 << 4) | (1 << 3)); // PWM mode 1, preload enable
+        core::ptr::write_volatile(tim_ccmr1, (0x6 << 4) | (1 << 3)); // PWM mode 1, preload enable
         
         // Enable Channel 1 output
         let tim_ccer = (TIM1_BASE + TIM_CCER) as *mut u32;
-        let ccer = core::ptr::read_volatile(tim_ccer);
-        core::ptr::write_volatile(tim_ccer, ccer | 1); // Enable CC1E
+        core::ptr::write_volatile(tim_ccer, 1); // Enable CC1E
         
-        // Enable timer
+        // Enable Main Output Enable (MOE) bit for advanced timer
+        const TIM_BDTR: u32 = 0x44; // Break and Dead-time Register
+        let tim_bdtr = (TIM1_BASE + TIM_BDTR) as *mut u32;
+        core::ptr::write_volatile(tim_bdtr, 1 << 15); // Set MOE bit
+        
+        // Enable timer with auto-reload preload
         let tim_cr1 = (TIM1_BASE + TIM_CR1) as *mut u32;
-        core::ptr::write_volatile(tim_cr1, 1); // Enable counter
+        core::ptr::write_volatile(tim_cr1, (1 << 7) | 1); // ARPE=1, CEN=1
     }
     
     SIDETONE_PWM.set_frequency(600);
@@ -598,6 +705,17 @@ fn configure_pwm_sidetone() {
 extern "C" fn SysTick() {
     let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
+    
+    // Wake main loop only if actively sending
+    let state = SYSTEM_STATE.load(Ordering::Relaxed);
+    if state == STATE_SENDING {
+        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
+    }
+    
+    // Periodic FSM update every 10ms for proper squeeze handling
+    if current % 10 == 0 {
+        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
+    }
 }
 
 /// EXTI2 interrupt handler - Dit paddle (PA2)
@@ -612,6 +730,8 @@ extern "C" fn EXTI7_0_IRQHandler() {
             DIT_INPUT.update_from_interrupt();
             // Clear EXTI2 pending bit
             core::ptr::write_volatile(exti_pr, 1 << 2);
+            // Set paddle event
+            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
         }
         
         // Check EXTI3 (PA3 - Dah paddle)
@@ -619,6 +739,8 @@ extern "C" fn EXTI7_0_IRQHandler() {
             DAH_INPUT.update_from_interrupt();
             // Clear EXTI3 pending bit
             core::ptr::write_volatile(exti_pr, 1 << 3);
+            // Set paddle event
+            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
         }
     }
 }

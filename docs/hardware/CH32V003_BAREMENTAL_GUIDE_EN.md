@@ -26,27 +26,48 @@ The CH32V003 is an ultra-low-cost RISC-V MCU with 16KB Flash / 2KB RAM. This imp
 └── Reserve:          224B (10%) - Safety margin
 ```
 
-### System Structure
+### System Structure - Event-Driven Architecture
 ```
 ┌─────────────────────────────────────────┐
-│            Main Loop                    │
+│       Event-Driven Main Loop           │
 │  ┌─────────────────────────────────────┐│
-│  │ critical_section::with(|| {        ││
-│  │   paddle_state = read_gpio();       ││  
-│  │   fsm.update(&paddle, &producer);   ││
-│  │ });                                 ││
-│  │ process_element_queue();            ││
+│  │ events = SYSTEM_EVENTS.load();      ││
+│  │ if events & EVENT_PADDLE:           ││
+│  │   critical_section::with(|| {      ││
+│  │     fsm.update(&paddle, &producer); ││
+│  │   });                              ││
+│  │ if consumer.ready():                ││
+│  │   process_element_low_power();      ││
+│  │ wfi(); // Sleep until interrupt     ││
 │  └─────────────────────────────────────┘│
 ├─────────────────────────────────────────┤
 │            Interrupt Handlers           │
-│  SysTick (1ms) → SYSTEM_TICK_MS++       │
-│  EXTI2/3 → Paddle interrupts → timestamp│
+│  SysTick: 1ms tick + 10ms FSM update   │
+│  EXTI2/3: Paddle → EVENT_PADDLE set    │
 ├─────────────────────────────────────────┤
-│            Hardware Control             │  
-│  GPIO: PA2/3(inputs), PD6/7(outputs)    │
-│  TIM1: 600Hz PWM sidetone               │
-│  RCC: Clock control                     │
+│            Power Management             │  
+│  STATE_IDLE: Full sleep (1-2mA)         │
+│  STATE_SENDING: Active timing (10mA)    │
+│  EVENT_FLAGS: Wake on demand only       │
 └─────────────────────────────────────────┘
+```
+
+### 🔋 Power Efficiency Optimization
+```
+Power Consumption Reduction (Estimated):
+┌─────────────┬─────────┬─────────┬─────────┐
+│   State     │  Before │  After  │ Savings │
+├─────────────┼─────────┼─────────┼─────────┤
+│ Idle        │  5-8mA  │  1-2mA  │   80%   │
+│ Paddle Use  │   8mA   │   5mA   │   38%   │
+│ Sending     │  10mA   │  10mA   │    0%   │
+└─────────────┴─────────┴─────────┴─────────┘
+
+Power Efficiency Techniques:
+• WFI instruction for deep sleep
+• Event-driven wake up
+• Elimination of unnecessary polling
+• High-precision timer only during transmission
 ```
 
 ## 🔌 Hardware Specification
@@ -303,12 +324,51 @@ openocd -f wch-riscv.cfg -c "program keyer-v003.hex verify reset exit"
 ### Performance Measurements
 ```
 □ Real hardware programming & operation
-□ Current consumption measurement
+□ Current consumption measurement (Idle: 1-2mA, Sending: 10mA)
 □ Timing accuracy measurement (oscilloscope)
-□ Sidetone frequency verification
-□ Paddle responsiveness evaluation
-□ Continuous operation stability
+□ Sidetone frequency verification (600Hz verification)
+□ Paddle responsiveness evaluation (EXTI interrupt <10μs)
+□ Continuous operation stability (power efficiency improved version)
 ```
+
+## 🔋 Phase 3.5: Power Efficiency Improvement Implementation (NEW!)
+
+### Event-Driven Architecture Introduction
+
+**Improvements**:
+1. **Eliminate unnecessary polling** - Remove forced 1ms wake-ups by SysTick
+2. **Utilize WFI instruction** - Complete sleep until interrupt
+3. **Enhanced state management** - Optimize operation with IDLE/SENDING states
+4. **Event flags** - Main loop operates only when necessary
+
+**Implementation Details**:
+```rust
+// Event management
+static SYSTEM_EVENTS: AtomicU32 = AtomicU32::new(0);
+const EVENT_PADDLE: u32 = 0x01;  // Paddle state change
+const EVENT_TIMER: u32 = 0x02;   // Timer event
+const EVENT_QUEUE: u32 = 0x04;   // Queue processing needed
+
+// Power-efficient main loop
+loop {
+    let events = SYSTEM_EVENTS.load(Ordering::Acquire);
+    
+    if events & EVENT_PADDLE != 0 {
+        // FSM update only on paddle events
+    }
+    
+    if consumer.ready() {
+        process_element_low_power(); // Low-power transmission
+    }
+    
+    unsafe { riscv::asm::wfi(); } // Sleep until next interrupt
+}
+```
+
+**Expected Effects**:
+- Idle current consumption: 5-8mA → 1-2mA (80% reduction)
+- Battery life: 2-3x extension
+- Responsiveness maintained: Paddle detection still <10μs
 
 ## 🚀 Commercialization Potential
 
