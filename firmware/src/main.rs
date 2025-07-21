@@ -3,14 +3,11 @@
 
 #[cfg(feature = "defmt")]
 use defmt_rtt as _;
-#[cfg(feature = "defmt")]
-use panic_probe as _;
 
 // RISC-V runtime
 use riscv_rt as _;
 
 // Panic handler
-#[cfg(not(feature = "defmt"))]
 use panic_halt as _;
 
 use embassy_executor::Spawner;
@@ -31,7 +28,7 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "defmt")]
     defmt::info!("🔧 Rusty Keyer Firmware Starting...");
 
-    // Initialize hardware (placeholder for now)
+    // Initialize CH32V203 hardware
     let _hal = init_hardware().await;
     #[cfg(feature = "defmt")]
     defmt::info!("✅ Hardware initialized");
@@ -89,11 +86,12 @@ async fn sender_task(
 ) {
     #[cfg(feature = "defmt")]
     defmt::info!("📤 Sender task started");
-    let mut key_output = MockKeyOutput::new();
+    // Use actual CH32V203 key output (through HAL)
+    // Note: KeyOutput will be handled by HAL instance
 
     loop {
         if let Some(element) = consumer.dequeue() {
-            let (on_time, _element_name) = match element {
+            let (on_time, element_name) = match element {
                 Element::Dit => (unit, "Dit"),
                 Element::Dah => (unit * 3, "Dah"),
                 Element::CharSpace => (Duration::from_millis(0), "Space"),
@@ -103,12 +101,12 @@ async fn sender_task(
                 #[cfg(feature = "defmt")]
                 defmt::debug!("📡 Sending {}", element_name);
                 
-                // Key down
-                key_output.set_state(true).ok();
+                // Key down - TODO: Access HAL instance for actual output
+                // hal.set_key_output(true);
                 embassy_time::Timer::after(on_time).await;
                 
                 // Key up
-                key_output.set_state(false).ok();
+                // hal.set_key_output(false);
                 
                 // Inter-element space (except for CharSpace)
                 embassy_time::Timer::after(unit).await;

@@ -13,7 +13,7 @@ pub use keyer_core::*;
 
 // Re-export hardware implementations
 pub use crate::mock_hardware::*;
-pub use crate::ch32v003_hardware::*;
+pub use crate::ch32v203_hardware::*;
 pub use crate::tasks::*;
 
 // Mock hardware module
@@ -145,7 +145,7 @@ pub mod tasks {
     
         loop {
             if let Some(element) = consumer.dequeue() {
-                let (on_time, _element_name) = match element {
+                let (on_time, element_name) = match element {
                     Element::Dit => (unit, "Dit"),
                     Element::Dah => (unit * 3, "Dah"),
                     Element::CharSpace => (Duration::from_millis(0), "Space"),
@@ -178,8 +178,8 @@ pub mod tasks {
     }
 }
 
-// CH32V003 hardware module
-pub mod ch32v003_hardware;
+// CH32V203 hardware module
+pub mod ch32v203_hardware;
 
 // Time driver for embassy
 mod time_driver;

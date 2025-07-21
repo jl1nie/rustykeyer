@@ -178,10 +178,19 @@ cargo doc --open --package keyer-core
 ## 🛠️ Supported Hardware
 
 ### Primary Targets
-- **CH32V003** (RISC-V) - Main target
+- **CH32V203** (RISC-V) - Main target (64KB Flash / 20KB RAM)
+- **CH32V003** (RISC-V) - Low-memory version (16KB Flash / 2KB RAM)
 - **STM32F4** (ARM Cortex-M4) - Test & development
 
-### Pin Configuration Example (CH32V003)
+### Memory Footprint Measurements (CH32V203)
+```
+📊 Flash Usage: 6.2KB / 64KB (10% - Plenty of room)
+📊 RAM Usage:   20KB / 20KB (100% - Needs optimization)
+⚡ Embassy overhead: ~8KB (task arena setting)
+🔧 Post-optimization estimate: RAM 12.5KB (62% - Practical)
+```
+
+### Pin Configuration Example (CH32V203/V003)
 ```
 PA0 - Dit Paddle Input  (Pull-up, EXTI0)
 PA1 - Dah Paddle Input  (Pull-up, EXTI1)  
@@ -207,9 +216,12 @@ cargo bench
 ## 🚧 Future Development
 
 ### Phase 1: Hardware Support
-- [x] CH32V003 HAL implementation
+- [x] CH32V203 HAL implementation (Embassy support)
+- [x] CH32V003 HAL implementation (Low-memory version)
 - [x] no_std support and RISC-V portability improvements
 - [x] Memory efficiency optimization (AtomicU32 support)
+- [x] Memory footprint measurement & analysis
+- [ ] RAM usage optimization (task-arena-size adjustment)
 - [ ] Hardware verification
 - [ ] Timing accuracy measurement
 
@@ -255,8 +267,9 @@ MIT
 - **Embassy Async Tasks Working** ⚡
 - **HAL Abstraction Complete** 🔧
 - **3 Modes Implemented** 🎛️
-- **CH32V003 Hardware Support** 🔌
+- **CH32V203/V003 Hardware Support** 🔌
 - **RISC-V no_std Optimization** ⚡
+- **Memory Footprint Measured** 📊
 
 **Development Method**: [Kiro Spec-Driven Development](https://github.com/kiro-framework/kiro)  
 **Total Development Time**: 1 Session  

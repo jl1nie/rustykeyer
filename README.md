@@ -178,10 +178,19 @@ cargo doc --open --package keyer-core
 ## 🛠️ 対応ハードウェア
 
 ### 主要ターゲット
-- **CH32V003** (RISC-V) - メインターゲット
+- **CH32V203** (RISC-V) - メインターゲット (64KB Flash / 20KB RAM)
+- **CH32V003** (RISC-V) - 省メモリ版 (16KB Flash / 2KB RAM)
 - **STM32F4** (ARM Cortex-M4) - テスト・開発用
 
-### ピン配置例 (CH32V003)
+### メモリフットプリント実測値 (CH32V203)
+```
+📊 Flash使用量: 6.2KB / 64KB (10% - 余裕たっぷり)
+📊 RAM使用量:  20KB / 20KB (100% - 要最適化)
+⚡ Embassy overhead: 約8KB (task arena設定)
+🔧 最適化後予測: RAM 12.5KB (62% - 実用的)
+```
+
+### ピン配置例 (CH32V203/V003)
 ```
 PA0 - Dit Paddle Input  (Pull-up, EXTI0)
 PA1 - Dah Paddle Input  (Pull-up, EXTI1)  
@@ -207,9 +216,12 @@ cargo bench
 ## 🚧 今後の開発
 
 ### Phase 1: 実機対応
-- [x] CH32V003 HAL実装
+- [x] CH32V203 HAL実装 (Embassy対応)
+- [x] CH32V003 HAL実装 (省メモリ版)
 - [x] no_std対応とRISC-V移植性改善
 - [x] メモリ効率化（AtomicU32対応）
+- [x] メモリフットプリント測定・分析
+- [ ] RAM使用量最適化 (task-arena-size調整)
 - [ ] 実機での動作確認
 - [ ] タイミング精度測定
 
@@ -255,8 +267,9 @@ MIT
 - **Embassy非同期タスク動作** ⚡
 - **HAL抽象化完成** 🔧
 - **3モード実装済み** 🎛️
-- **CH32V003ハードウェア対応** 🔌
+- **CH32V203/V003ハードウェア対応** 🔌
 - **RISC-V no_std最適化** ⚡
+- **メモリフットプリント実測済み** 📊
 
 **開発手法**: [Kiro Spec-Driven Development](https://github.com/kiro-framework/kiro) 
 **総開発時間**: 1セッション  

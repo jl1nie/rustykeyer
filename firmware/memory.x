@@ -1,9 +1,9 @@
-/* CH32V003 Memory Layout */
+/* CH32V203 Memory Layout */
 MEMORY
 {
-  /* CH32V003F4P6 has 16K flash and 2K RAM */
-  FLASH : ORIGIN = 0x08000000, LENGTH = 16K
-  RAM : ORIGIN = 0x20000000, LENGTH = 2K
+  /* CH32V203C8T6 has 64K flash and 20K RAM */
+  FLASH : ORIGIN = 0x08000000, LENGTH = 64K
+  RAM : ORIGIN = 0x20000000, LENGTH = 20K
 }
 
 /* Define regions for sections */
@@ -14,5 +14,5 @@ REGION_ALIAS("REGION_BSS", RAM);
 REGION_ALIAS("REGION_HEAP", RAM);
 REGION_ALIAS("REGION_STACK", RAM);
 
-/* Stack size - 512 bytes */
-_stack_size = 512;
+/* Stack size - 4KB (ample for Embassy tasks) */
+_stack_size = 4096;
