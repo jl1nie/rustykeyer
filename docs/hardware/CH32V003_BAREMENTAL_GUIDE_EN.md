@@ -121,11 +121,40 @@ fn hardware_init() {
     // 3. Setup SysTick (1ms interrupt)
     configure_systick();         // 24MHz → 24000 ticks
     
-    // 4. Setup EXTI (paddle interrupts)
-    configure_exti_interrupts(); // PA2/PA3 → EXTI2/3
+    // 4. Setup EXTI (paddle interrupts - both-edge detection)
+    configure_exti_interrupts(); // PA2/PA3 → EXTI2/3 both edges
     
     // 5. Setup TIM1 PWM (600Hz)
     configure_pwm_sidetone();    // Sidetone generation
+}
+
+// EXTI both-edge detection configuration detail
+fn configure_exti_interrupts() {
+    unsafe {
+        // AFIO configuration: Map EXTI2/3 to Port A
+        let afio_pcfr1 = (AFIO_BASE + AFIO_PCFR1) as *mut u32;
+        let pcfr1 = core::ptr::read_volatile(afio_pcfr1);
+        core::ptr::write_volatile(afio_pcfr1, pcfr1);
+        
+        // Enable both-edge detection
+        let exti_imr = (EXTI_BASE + EXTI_IMR) as *mut u32;
+        let exti_ftsr = (EXTI_BASE + EXTI_FTSR) as *mut u32;
+        let exti_rtsr = (EXTI_BASE + EXTI_RTSR) as *mut u32;
+        
+        // Enable interrupt mask
+        let imr = core::ptr::read_volatile(exti_imr);
+        core::ptr::write_volatile(exti_imr, imr | (1 << 2) | (1 << 3));
+        
+        // ★Both-edge detection: Falling (press) + Rising (release)
+        let ftsr = core::ptr::read_volatile(exti_ftsr);
+        core::ptr::write_volatile(exti_ftsr, ftsr | (1 << 2) | (1 << 3));
+        
+        let rtsr = core::ptr::read_volatile(exti_rtsr);
+        core::ptr::write_volatile(exti_rtsr, rtsr | (1 << 2) | (1 << 3));
+        
+        // Enable NVIC interrupt
+        enable_nvic_interrupt(EXTI7_0_IRQn);
+    }
 }
 ```
 
@@ -156,32 +185,48 @@ impl Ch32v003Output {
 }
 ```
 
-### 3. Interrupt Handling
+### 3. Interrupt Handling - Event-Driven Architecture
 
 ```rust
+// Power-efficient SysTick (conditional wake-up)
 #[no_mangle]
 extern "C" fn SysTick() {
-    // Update system time every 1ms
     let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
+    
+    // Wake main loop only during active transmission
+    let system_state: SystemState = unsafe {
+        core::mem::transmute(SYSTEM_STATE.load(Ordering::Relaxed))
+    };
+    if system_state == SystemState::Sending {
+        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
+    }
+    
+    // Periodic FSM update every 10ms for proper squeeze handling
+    if current % 10 == 0 {
+        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
+    }
 }
 
+// Both-edge detection EXTI handler
 #[no_mangle] 
 extern "C" fn EXTI7_0_IRQHandler() {
     unsafe {
         let exti_pr = (EXTI_BASE + EXTI_PR) as *mut u32;
         let pending = core::ptr::read_volatile(exti_pr);
         
-        // EXTI2 (PA2 - Dit)
+        // EXTI2 (PA2 - Dit) both-edge detection
         if pending & (1 << 2) != 0 {
             DIT_INPUT.update_from_interrupt();
             core::ptr::write_volatile(exti_pr, 1 << 2);
+            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
         }
         
-        // EXTI3 (PA3 - Dah)  
+        // EXTI3 (PA3 - Dah) both-edge detection
         if pending & (1 << 3) != 0 {
             DAH_INPUT.update_from_interrupt();
             core::ptr::write_volatile(exti_pr, 1 << 3);
+            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
         }
     }
 }
@@ -222,31 +267,118 @@ fn set_duty(&self, duty: u16) { // duty: 0-1000 (0-100%)
 }
 ```
 
-### 5. Main Loop
+### 5. Main Loop - 3-Phase Event-Driven Architecture
 
 ```rust
 loop {
-    // Read paddle state + FSM update
-    critical_section::with(|_| {
-        let dit_pressed = DIT_INPUT.is_low();
-        let dah_pressed = DAH_INPUT.is_low();
-        
-        let current_paddle = PaddleInput::new();
-        let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-        
-        current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
-        current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
-        
-        fsm.update(&current_paddle, &mut producer);
-    });
+    // Phase 1: Event handling and FSM updates
+    let events = SYSTEM_EVENTS.load(Ordering::Acquire);
     
-    // Process output queue
-    if let Some(element) = consumer.dequeue() {
-        process_element(element, keyer_config.unit);
+    if events != 0 {
+        SYSTEM_EVENTS.fetch_and(!events, Ordering::Release);
+        
+        // Paddle events or periodic FSM update
+        if events & EVENT_PADDLE != 0 || 
+           get_current_instant().duration_since(last_fsm_update).as_millis() >= 10 {
+            
+            critical_section::with(|_| {
+                let dit_pressed = DIT_INPUT.is_low();
+                let dah_pressed = DAH_INPUT.is_low();
+                
+                let current_paddle = PaddleInput::new();
+                let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+                
+                current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
+                current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
+                
+                fsm.update(&current_paddle, &mut producer);
+            });
+            
+            last_fsm_update = get_current_instant();
+        }
     }
     
-    // CPU sleep (wait for interrupt)
-    unsafe { riscv::asm::wfi(); }
+    // Phase 2: Non-blocking transmission state update
+    let transmission_active = update_transmission_state(unit_ms);
+    
+    // Phase 3: Start new element transmission (only when transmission idle)
+    if !transmission_active {
+        if let Some(element) = consumer.dequeue() {
+            start_element_transmission(element, unit_ms);
+        }
+    }
+    
+    // CPU sleep only when completely idle (maximum power efficiency)
+    let has_work = is_transmission_active() || 
+                   consumer.ready() || 
+                   SYSTEM_EVENTS.load(Ordering::Relaxed) != 0;
+    
+    if !has_work {
+        unsafe { riscv::asm::wfi(); }  // Wait For Interrupt
+    }
+}
+
+// Non-blocking transmission FSM implementation
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum TransmitState {
+    Idle = 0,        // Waiting for next element
+    DitKeyDown = 1,  // Dit transmission active
+    DitSpace = 2,    // Dit inter-element space
+    DahKeyDown = 3,  // Dah transmission active  
+    DahSpace = 4,    // Dah inter-element space
+    CharSpace = 5,   // Character space pause
+}
+
+fn start_element_transmission(element: Element, unit_ms: u32) {
+    match element {
+        Element::Dit => {
+            set_transmit_state(TransmitState::DitKeyDown, unit_ms);
+            KEY_OUTPUT.set_high();
+            PWM.set_duty(500); // 50% duty sidetone
+        }
+        Element::Dah => {
+            set_transmit_state(TransmitState::DahKeyDown, unit_ms * 3);
+            KEY_OUTPUT.set_high();
+            PWM.set_duty(500);
+        }
+        Element::CharacterSpace => {
+            set_transmit_state(TransmitState::CharSpace, unit_ms * 7);
+        }
+    }
+}
+
+fn update_transmission_state(unit_ms: u32) -> bool {
+    let current_state = get_transmit_state();
+    
+    if !is_transmission_time_expired() {
+        return true; // Still transmitting
+    }
+    
+    match current_state {
+        TransmitState::DitKeyDown => {
+            // Dit finished → space
+            KEY_OUTPUT.set_low();
+            PWM.set_duty(0);
+            set_transmit_state(TransmitState::DitSpace, unit_ms);
+        }
+        TransmitState::DahKeyDown => {
+            // Dah finished → space
+            KEY_OUTPUT.set_low(); 
+            PWM.set_duty(0);
+            set_transmit_state(TransmitState::DahSpace, unit_ms);
+        }
+        TransmitState::DitSpace | TransmitState::DahSpace | TransmitState::CharSpace => {
+            // Space finished → Idle
+            set_transmit_state(TransmitState::Idle, 0);
+            return false; // Transmission complete
+        }
+        TransmitState::Idle => {
+            return false; // Inactive
+        }
+    }
+    
+    true // Transmission continuing
 }
 ```
 
