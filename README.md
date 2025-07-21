@@ -2,7 +2,7 @@
 
 **高性能 Iambic Keyer** - Rust + Embassy で実装された組み込み向けCW（モールス信号）キーヤー
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/rustykeyer/rustykeyer)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/jl1nie/rustykeyer)
 [![Embassy](https://img.shields.io/badge/Embassy-0.6-blue)](https://embassy.dev/)
 [![no_std](https://img.shields.io/badge/no__std-✓-green)](https://docs.rust-embedded.org/book/intro/no-std.html)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE)
