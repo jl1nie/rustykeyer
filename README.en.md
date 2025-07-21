@@ -1,22 +1,22 @@
 # 🔧 Rusty Keyer
 
-**高性能 Iambic Keyer** - Rust + Embassy で実装された組み込み向けCW（モールス信号）キーヤー
+**High-Performance Iambic Keyer** - Embedded CW (Morse Code) Keyer implemented with Rust + Embassy
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/jl1nie/rustykeyer)
 [![Embassy](https://img.shields.io/badge/Embassy-0.6-blue)](https://embassy.dev/)
 [![no_std](https://img.shields.io/badge/no__std-✓-green)](https://docs.rust-embedded.org/book/intro/no-std.html)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## ✨ 特徴
+## ✨ Features
 
-- **3つのキーヤーモード**: Mode A、Mode B（Curtis A）、SuperKeyer（Dah優先）
-- **リアルタイム性能**: 割り込み安全、unit/4周期更新（15ms@20WPM）
-- **Embassy非同期**: async/awaitによる高効率タスク実行
-- **HAL抽象化**: 異なるMCU間での移植性確保
-- **no_std対応**: 組み込み環境でのメモリ効率実装
-- **型安全**: Rustの型システムによるコンパイル時検証
+- **3 Keyer Modes**: Mode A, Mode B (Curtis A), SuperKeyer (Dah Priority)
+- **Real-time Performance**: Interrupt-safe, unit/4 cycle updates (15ms@20WPM)
+- **Embassy Async**: High-efficiency task execution with async/await
+- **HAL Abstraction**: Portability across different MCUs
+- **no_std Support**: Memory-efficient implementation for embedded environments
+- **Type Safety**: Compile-time verification with Rust's type system
 
-## 🏗️ アーキテクチャ
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -39,9 +39,9 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-## 🚀 クイックスタート
+## 🚀 Quick Start
 
-### 依存関係
+### Dependencies
 
 ```toml
 [dependencies]
@@ -50,7 +50,7 @@ embassy-executor = { version = "0.6", features = ["arch-riscv32"] }
 embassy-time = { version = "0.3", features = ["defmt"] }
 ```
 
-### 基本的な使用方法
+### Basic Usage
 
 ```rust
 use keyer_core::*;
@@ -58,7 +58,7 @@ use embassy_executor::Spawner;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // キーヤー設定
+    // Keyer configuration
     let config = KeyerConfig {
         mode: KeyerMode::SuperKeyer,
         char_space_enabled: true,
@@ -67,81 +67,81 @@ async fn main(spawner: Spawner) {
         queue_size: 64,
     };
     
-    // タスクの起動
+    // Start tasks
     spawner.must_spawn(evaluator_task(&PADDLE, producer, config));
     spawner.must_spawn(sender_task(consumer, config.unit));
 }
 ```
 
-## 📦 プロジェクト構造
+## 📦 Project Structure
 
 ```
 rustykeyer/
-├── keyer-core/           # 🦀 コアライブラリ (no_std)
+├── keyer-core/           # 🦀 Core library (no_std)
 │   ├── src/
-│   │   ├── types.rs      # データ型定義
-│   │   ├── hal.rs        # HAL抽象化
-│   │   ├── controller.rs # 入力制御・SuperKeyer
-│   │   ├── fsm.rs        # 有限状態機械
-│   │   └── test_utils.rs # テストユーティリティ
+│   │   ├── types.rs      # Data type definitions
+│   │   ├── hal.rs        # HAL abstraction
+│   │   ├── controller.rs # Input control & SuperKeyer
+│   │   ├── fsm.rs        # Finite state machine
+│   │   └── test_utils.rs # Test utilities
 │   └── Cargo.toml
-├── firmware/             # 🔌 Firmwareアプリケーション
+├── firmware/             # 🔌 Firmware application
 │   ├── src/main.rs       # Embassy executor
 │   └── Cargo.toml
-├── tests/                # 🧪 ホストベーステスト
-└── .kiro/                # 📋 Kiro仕様書
+├── tests/                # 🧪 Host-based tests
+└── .kiro/                # 📋 Kiro specifications
     └── specs/keyer-main/
         ├── requirements.md
         ├── design.md
         └── tasks.md
 ```
 
-## ⚙️ キーヤーモード
+## ⚙️ Keyer Modes
 
-### Mode A (基本 Iambic)
-- スクイーズ時に交互送出
-- 解除時は即座に停止
-- メモリ機能なし
+### Mode A (Basic Iambic)
+- Alternating transmission on squeeze
+- Immediate stop on release
+- No memory function
 
 ### Mode B (Curtis A)
-- Mode A + 1要素メモリ
-- スクイーズ解除時に反対要素を1回送出
-- Accu-Keyer互換
+- Mode A + 1-element memory
+- Transmits opposite element once on squeeze release
+- Accu-Keyer compatible
 
-### SuperKeyer (Dah優先)
-- **Dah優先**: 同時押下時はDahを優先
-- **高度メモリ**: 押下履歴に基づく送出制御
-- **タイムスタンプ判定**: 正確な優先度決定
+### SuperKeyer (Dah Priority)
+- **Dah Priority**: Prioritizes Dah on simultaneous press
+- **Advanced Memory**: Transmission control based on press history
+- **Timestamp Judgment**: Accurate priority determination
 
-## 🎯 性能指標
+## 🎯 Performance Metrics
 
-| 項目 | 目標値 | 達成状況 |
-|------|--------|----------|
-| 割り込み応答時間 | < 10μs | ✅ |
-| ISR実行時間 | < 5μs | ✅ |
-| メモリ使用量 | < 2KB | ✅ |
-| タイミング精度 | ±1% | ✅ |
-| FSM更新周期 | unit/4 | ✅ |
+| Item | Target | Status |
+|------|--------|--------|
+| Interrupt Response Time | < 10μs | ✅ |
+| ISR Execution Time | < 5μs | ✅ |
+| Memory Usage | < 2KB | ✅ |
+| Timing Accuracy | ±1% | ✅ |
+| FSM Update Cycle | unit/4 | ✅ |
 
-## 🔧 ビルド & テスト
+## 🔧 Build & Test
 
 ```bash
-# コアライブラリのチェック
+# Check core library
 cargo check -p keyer-core
 
-# Firmwareのビルド
+# Build firmware
 cargo check -p rustykeyer-firmware
 
-# 全プロジェクトのビルド
+# Build entire project
 cargo build --workspace
 
-# テスト実行 (将来実装)
+# Run tests (future implementation)
 cargo test -p keyer-tests
 ```
 
-## 🎛️ 設定例
+## 🎛️ Configuration Examples
 
-### 20 WPM (初心者向け)
+### 20 WPM (Beginner)
 ```rust
 KeyerConfig {
     mode: KeyerMode::ModeB,
@@ -152,7 +152,7 @@ KeyerConfig {
 }
 ```
 
-### 35 WPM (上級者向け)
+### 35 WPM (Advanced)
 ```rust
 KeyerConfig {
     mode: KeyerMode::SuperKeyer,
@@ -163,69 +163,69 @@ KeyerConfig {
 }
 ```
 
-## 📖 ドキュメント
+## 📖 Documentation
 
-### 設計ドキュメント
-- [要件仕様書](.kiro/specs/keyer-main/requirements.md) - 機能要件・動作仕様
-- [技術設計書](.kiro/specs/keyer-main/design.md) - アーキテクチャ・実装詳細
-- [タスクリスト](.kiro/specs/keyer-main/tasks.md) - 実装進捗 (21/21完了)
+### Design Documents
+- [Requirements Specification](.kiro/specs/keyer-main/requirements.md) - Functional requirements & operation specs
+- [Technical Design](.kiro/specs/keyer-main/design.md) - Architecture & implementation details
+- [Task List](.kiro/specs/keyer-main/tasks.md) - Implementation progress (21/21 completed)
 
-### APIドキュメント
+### API Documentation
 ```bash
 cargo doc --open --package keyer-core
 ```
 
-## 🛠️ 対応ハードウェア
+## 🛠️ Supported Hardware
 
-### 主要ターゲット
-- **CH32V003** (RISC-V) - メインターゲット
-- **STM32F4** (ARM Cortex-M4) - テスト・開発用
+### Primary Targets
+- **CH32V003** (RISC-V) - Main target
+- **STM32F4** (ARM Cortex-M4) - Test & development
 
-### ピン配置例 (CH32V003)
+### Pin Configuration Example (CH32V003)
 ```
 PA0 - Dit Paddle Input  (Pull-up, EXTI0)
 PA1 - Dah Paddle Input  (Pull-up, EXTI1)  
 PA2 - Key Output        (Push-pull)
-PA3 - Sidetone Output   (オプション)
+PA3 - Sidetone Output   (Optional)
 ```
 
-## 🧪 テスト
+## 🧪 Testing
 
-### ホストベーステスト (準備済み)
-- 仮想時間シミュレーション
-- パドル入力シミュレータ
-- タイミング精度解析
-- FSM状態遷移テスト
+### Host-based Testing (Ready)
+- Virtual time simulation
+- Paddle input simulator
+- Timing accuracy analysis
+- FSM state transition tests
 
-### テスト実行 (将来)
+### Test Execution (Future)
 ```bash
 cd tests
 cargo run --bin integration_tests
 cargo bench
 ```
 
-## 🚧 今後の開発
+## 🚧 Future Development
 
-### Phase 1: 実機対応
-- [ ] CH32V003 HAL実装
-- [ ] 実機での動作確認
-- [ ] タイミング精度測定
+### Phase 1: Hardware Support
+- [ ] CH32V003 HAL implementation
+- [ ] Hardware verification
+- [ ] Timing accuracy measurement
 
-### Phase 2: 機能拡張
-- [ ] サイドトーン生成
-- [ ] WPM動的調整
-- [ ] 設定保存機能
+### Phase 2: Feature Extensions
+- [ ] Sidetone generation
+- [ ] Dynamic WPM adjustment
+- [ ] Configuration storage
 
-### Phase 3: 最適化
-- [ ] 省電力モード
-- [ ] メモリ最適化
-- [ ] レイテンシ最小化
+### Phase 3: Optimization
+- [ ] Power saving mode
+- [ ] Memory optimization
+- [ ] Latency minimization
 
-## 📜 ライセンス
+## 📜 License
 
 MIT
 
-## 🤝 コントリビューション
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -233,29 +233,29 @@ MIT
 4. Run tests and checks
 5. Submit a pull request
 
-### 開発環境要件
+### Development Environment Requirements
 - Rust 1.70+
 - Embassy 0.6+
 - Target: `riscv32imac-unknown-none-elf`
 
-## 📞 サポート
+## 📞 Support
 
 - [GitHub Issues](https://github.com/rustykeyer/rustykeyer/issues)
 - [Documentation](https://docs.rs/rustykeyer)
 
 ---
 
-## 🎉 実装ステータス
+## 🎉 Implementation Status
 
-**✅ 実装完了** (2025-01-21)
-- **21/21 タスク完了** 🎯
-- **全プロジェクトコンパイル成功** ✅
-- **Embassy非同期タスク動作** ⚡
-- **HAL抽象化完成** 🔧
-- **3モード実装済み** 🎛️
+**✅ Implementation Complete** (2025-01-21)
+- **21/21 Tasks Completed** 🎯
+- **All Projects Compile Successfully** ✅
+- **Embassy Async Tasks Working** ⚡
+- **HAL Abstraction Complete** 🔧
+- **3 Modes Implemented** 🎛️
 
-**開発手法**: [Kiro Spec-Driven Development](https://github.com/kiro-framework/kiro) 
-**総開発時間**: 1セッション  
-**コード行数**: ~40KB (設計書含む)
+**Development Method**: [Kiro Spec-Driven Development](https://github.com/kiro-framework/kiro)  
+**Total Development Time**: 1 Session  
+**Lines of Code**: ~40KB (including design docs)
 
-> *「Rustの安全性 × Embassyの非同期性 × アマチュア無線の伝統」*
+> *"Rust Safety × Embassy Async × Amateur Radio Tradition"*

@@ -22,7 +22,7 @@ tokio-test = "0.4"
 [workspace.metadata]
 docs = "https://docs.rs/rustykeyer"
 repository = "https://github.com/rustykeyer/rustykeyer"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [profile.release]
 debug = 2
