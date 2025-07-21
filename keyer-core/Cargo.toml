@@ -1,0 +1,21 @@
+[package]
+name = "keyer-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core iambic keyer logic library (no_std)"
+
+[features]
+default = ["embassy-time"]
+std = []
+test-utils = ["std"]
+embassy-time = ["dep:embassy-time"]
+
+[dependencies]
+embedded-hal = { workspace = true }
+heapless = { workspace = true }
+defmt = { workspace = true, optional = true }
+embassy-time = { workspace = true, optional = true }
+
+[dev-dependencies]
+# tokio = { workspace = true }
+# tokio-test = { workspace = true }

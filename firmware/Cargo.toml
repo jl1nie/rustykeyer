@@ -1,0 +1,29 @@
+[package]
+name = "rustykeyer-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "CH32V003 iambic keyer firmware"
+
+[dependencies]
+keyer-core = { path = "../keyer-core" }
+embassy-executor = { workspace = true, features = ["arch-std", "executor-thread"] }
+embassy-time = { workspace = true, features = ["defmt"] }
+embassy-sync = "0.6"
+embedded-hal = { workspace = true }
+heapless = { workspace = true }
+defmt = { workspace = true }
+defmt-rtt = "0.4"
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+static_cell = "2.1"
+
+# CH32V HAL (placeholder - adjust based on actual HAL crate)
+# ch32v0-hal = { version = "0.1", features = ["ch32v003", "rt"] }
+
+[[bin]]
+name = "keyer"
+path = "src/main.rs"
+test = false
+bench = false
+
