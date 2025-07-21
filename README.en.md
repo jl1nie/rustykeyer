@@ -166,8 +166,8 @@ KeyerConfig {
 ## 📖 Documentation
 
 ### Design Documents
-- [Requirements Specification](.kiro/specs/keyer-main/requirements.md) - Functional requirements & operation specs
-- [Technical Design](.kiro/specs/keyer-main/design.md) - Architecture & implementation details
+- [Requirements Specification](.kiro/specs/keyer-main/requirements.en.md) - Functional requirements & operation specs
+- [Technical Design](.kiro/specs/keyer-main/design.en.md) - Architecture & implementation details
 - [Task List](.kiro/specs/keyer-main/tasks.md) - Implementation progress (21/21 completed)
 
 ### API Documentation
