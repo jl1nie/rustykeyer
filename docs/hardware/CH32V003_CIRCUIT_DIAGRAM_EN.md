@@ -1,10 +1,10 @@
-# CH32V003 Iambic Keyer Circuit Diagram
+# CH32V003/V203 Iambic Keyer Circuit Diagram
 
-**TLP785 Optocoupler Design** - Safe Radio Connection Circuit
+**TLP785 Optocoupler Design** - Safe Radio Connection Circuit (Dual Platform Support)
 
 ## 📋 Overview
 
-Implementation circuit for iambic keyer using CH32V003. By using TLP785 optocoupler, complete electrical isolation from the radio is achieved, providing safe and reliable key control.
+Implementation circuit for iambic keyer supporting both CH32V003 and CH32V203 platforms. By using TLP785 optocoupler, complete electrical isolation from the radio is achieved, providing safe and reliable key control.
 
 ### 🎯 Design Philosophy
 - **Electrical Isolation**: Complete separation from radio via optocoupler
@@ -270,9 +270,50 @@ Operation Test:
 - **Shielding**: Use metal case if necessary
 - **Wiring**: Minimize key line length
 
+## 🔧 CH32V203 Circuit Layout (NEW!)
+
+### 🏆 V203-Specific Pin Assignment
+
+CH32V203 uses different pin assignment:
+
+```
+                    CH32V203 (48-pin)
+        Pin Assignment:
+        PA0: Dit input (Pull-up, EXTI0) ← V003's PA2
+        PA1: Dah input (Pull-up, EXTI1) ← V003's PA3  
+        PA2: Key control output → TLP785 ← V003's PD6
+        PA3: PWM Sidetone output        ← V003's PA1
+        
+        Status LED: Any GPIO pin (e.g., PC13)
+```
+
+### 📊 Platform Comparison
+
+| **Signal** | **CH32V003** | **CH32V203** | **Function** |
+|:----------:|:------------:|:------------:|:------------:|
+| **Dit Input** | PA2 (EXTI2) | PA0 (EXTI0) | Paddle detection |
+| **Dah Input** | PA3 (EXTI3) | PA1 (EXTI1) | Paddle detection |
+| **Key Output** | PD6 | PA2 | TLP785 control |
+| **PWM Audio** | PA1 (TIM1_CH1) | PA3 (TIM1_CH3) | Sidetone |
+| **LED** | PD7 | PC13 (example) | Status indication |
+
+### 🔄 Unified Edge Detection Implementation
+
+Unified operation across both platforms:
+
+```
+Common Features:
+✅ Both-edge (rising/falling) detection
+✅ Complete paddle press/release tracking  
+✅ 1ms precision timing control
+✅ Complete TLP785 isolation
+✅ 600Hz PWM sidetone
+```
+
 ## 📖 Related Documentation
 
-- **[CH32V003 Implementation Guide](CH32V003_BAREMENTAL_GUIDE_EN.md)** - Software implementation details
+- **[CH32V003 Implementation Guide](CH32V003_BAREMENTAL_GUIDE_EN.md)** - V003 software implementation details
+- **[CH32V203 Implementation Guide](CH32V203_EMBASSY_GUIDE_EN.md)** - V203 software implementation details (future addition)
 - **[API Reference](../api/keyer-core-api-en.md)** - Library specifications
 - **[Assembly Guide](CH32V003_ASSEMBLY_GUIDE_EN.md)** - Implementation procedures (future addition)
 
@@ -284,6 +325,7 @@ This circuit achieves:
 - **Complete Isolation**: Radio protection via optocoupler
 - **Minimal Configuration**: Full functionality with 7 components
 - **High Reliability**: Professional-grade isolation and protection circuit
-- **Cost Efficiency**: Total component cost approximately $5
+- **Cost Efficiency**: V003: ~$5, V203: ~$8
+- **Cross-platform**: Optimal choices for different use cases
 
-**Ultimate cost-performance iambic keyer realized with CH32V003 + TLP785**
+**Ultimate cost-performance iambic keyer realized with CH32V003/V203 + TLP785**
