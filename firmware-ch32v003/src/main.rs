@@ -725,15 +725,21 @@ fn configure_exti_interrupts() {
         // EXTI2 and EXTI3 map to Port A (0x0)
         core::ptr::write_volatile(afio_pcfr1, pcfr1);
         
-        // Enable EXTI2 and EXTI3 interrupts (falling edge for active-low paddles)
+        // Enable EXTI2 and EXTI3 interrupts (both edges for complete paddle detection)
         let exti_imr = (EXTI_BASE + EXTI_IMR) as *mut u32;
         let exti_ftsr = (EXTI_BASE + EXTI_FTSR) as *mut u32;
+        let exti_rtsr = (EXTI_BASE + EXTI_RTSR) as *mut u32;
         
+        // Enable interrupt mask for EXTI2 and EXTI3
         let imr = core::ptr::read_volatile(exti_imr);
-        core::ptr::write_volatile(exti_imr, imr | (1 << 2) | (1 << 3)); // Enable EXTI2 and EXTI3
+        core::ptr::write_volatile(exti_imr, imr | (1 << 2) | (1 << 3));
         
+        // Enable both falling and rising edge triggers
         let ftsr = core::ptr::read_volatile(exti_ftsr);
-        core::ptr::write_volatile(exti_ftsr, ftsr | (1 << 2) | (1 << 3)); // Falling edge trigger
+        core::ptr::write_volatile(exti_ftsr, ftsr | (1 << 2) | (1 << 3)); // Falling edge (press)
+        
+        let rtsr = core::ptr::read_volatile(exti_rtsr);
+        core::ptr::write_volatile(exti_rtsr, rtsr | (1 << 2) | (1 << 3)); // Rising edge (release)
         
         // Enable NVIC for EXTI7_0 interrupt (covers EXTI0-7)
         // CH32V003 NVIC ISER register for interrupt 30 (EXTI7_0)

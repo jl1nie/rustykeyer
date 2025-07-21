@@ -2,8 +2,8 @@
 //! 
 //! 64KB Flash / 20KB RAM - Embassy-optimized implementation
 
-use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration, Instant};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use embassy_time::Instant;
 use keyer_core::types::PaddleSide;
 use static_cell::StaticCell;
 
@@ -103,7 +103,7 @@ impl Ch32v203KeyerHal {
 /// Dit paddle input pin (PA0)
 pub struct DitInputPin {
     pressed: AtomicBool,
-    last_edge: Option<Instant>,
+    last_edge: AtomicU64,
     debounce_ms: u32,
 }
 
@@ -111,20 +111,27 @@ impl DitInputPin {
     fn new() -> Self {
         Self {
             pressed: AtomicBool::new(false),
-            last_edge: None,
+            last_edge: AtomicU64::new(0),
             debounce_ms: 10,
         }
     }
     
     fn init(&self) -> Result<(), ()> {
-        // Configure PA0 as input with pull-up
-        // Enable EXTI0 interrupt
+        // Configure PA0 as input with pull-up (active-low)
+        // Enable EXTI0 interrupt on both edges (press and release detection)
+        // Implementation would configure:
+        // 1. GPIO PA0 as input with pull-up
+        // 2. EXTI0 for both rising and falling edges (like V003)
+        // 3. NVIC interrupt enable for EXTI0
         Ok(())
     }
     
-    /// Called from EXTI0 interrupt handler
-    pub fn on_interrupt(&self, state: bool) {
-        self.pressed.store(state, Ordering::Relaxed);
+    /// Called from EXTI0 interrupt handler (both edges)
+    pub fn on_interrupt(&self, pressed: bool) {
+        self.pressed.store(pressed, Ordering::Relaxed);
+        // Store timestamp as microseconds since boot
+        let now_us = Instant::now().as_micros();
+        self.last_edge.store(now_us, Ordering::Relaxed);
     }
 }
 
@@ -136,7 +143,12 @@ impl InputPaddle for DitInputPin {
     }
     
     fn last_edge_time(&self) -> Option<Instant> {
-        self.last_edge
+        let edge_us = self.last_edge.load(Ordering::Relaxed);
+        if edge_us == 0 {
+            None
+        } else {
+            Some(Instant::from_micros(edge_us))
+        }
     }
     
     fn set_debounce_time(&mut self, time_ms: u32) -> Result<(), Self::Error> {
@@ -156,7 +168,7 @@ impl InputPaddle for DitInputPin {
 /// Dah paddle input pin (PA1)
 pub struct DahInputPin {
     pressed: AtomicBool,
-    last_edge: Option<Instant>,
+    last_edge: AtomicU64,
     debounce_ms: u32,
 }
 
@@ -164,20 +176,27 @@ impl DahInputPin {
     fn new() -> Self {
         Self {
             pressed: AtomicBool::new(false),
-            last_edge: None,
+            last_edge: AtomicU64::new(0),
             debounce_ms: 10,
         }
     }
     
     fn init(&self) -> Result<(), ()> {
-        // Configure PA1 as input with pull-up
-        // Enable EXTI1 interrupt
+        // Configure PA1 as input with pull-up (active-low)
+        // Enable EXTI1 interrupt on both edges (press and release detection)
+        // Implementation would configure:
+        // 1. GPIO PA1 as input with pull-up
+        // 2. EXTI1 for both rising and falling edges (like V003)
+        // 3. NVIC interrupt enable for EXTI1
         Ok(())
     }
     
-    /// Called from EXTI1 interrupt handler
-    pub fn on_interrupt(&self, state: bool) {
-        self.pressed.store(state, Ordering::Relaxed);
+    /// Called from EXTI1 interrupt handler (both edges)
+    pub fn on_interrupt(&self, pressed: bool) {
+        self.pressed.store(pressed, Ordering::Relaxed);
+        // Store timestamp as microseconds since boot
+        let now_us = Instant::now().as_micros();
+        self.last_edge.store(now_us, Ordering::Relaxed);
     }
 }
 
@@ -189,7 +208,12 @@ impl InputPaddle for DahInputPin {
     }
     
     fn last_edge_time(&self) -> Option<Instant> {
-        self.last_edge
+        let edge_us = self.last_edge.load(Ordering::Relaxed);
+        if edge_us == 0 {
+            None
+        } else {
+            Some(Instant::from_micros(edge_us))
+        }
     }
     
     fn set_debounce_time(&mut self, time_ms: u32) -> Result<(), Self::Error> {
@@ -251,15 +275,31 @@ pub fn init_global_hal() -> &'static mut Ch32v203KeyerHal {
 // Interrupt handlers (to be connected to actual EXTI handlers)
 
 /// EXTI0 interrupt handler for Dit paddle
-pub fn handle_dit_interrupt(state: bool) {
-    // Access global HAL instance and update Dit state
-    // This will be called from the actual EXTI0 handler
+pub fn handle_dit_interrupt() {
+    // In a real implementation, this would:
+    // 1. Read GPIO state to determine press/release
+    // 2. Call dit_pin.on_interrupt(pressed) to update atomic state
+    // 3. Handle both rising and falling edges like V003
+    
+    // Pseudo-implementation:
+    // let pressed = !read_gpio_pa0(); // Active-low with pull-up
+    // if let Some(hal) = get_global_hal() {
+    //     hal.dit_pin.on_interrupt(pressed);
+    // }
 }
 
 /// EXTI1 interrupt handler for Dah paddle  
-pub fn handle_dah_interrupt(state: bool) {
-    // Access global HAL instance and update Dah state
-    // This will be called from the actual EXTI1 handler
+pub fn handle_dah_interrupt() {
+    // In a real implementation, this would:
+    // 1. Read GPIO state to determine press/release
+    // 2. Call dah_pin.on_interrupt(pressed) to update atomic state
+    // 3. Handle both rising and falling edges like V003
+    
+    // Pseudo-implementation:
+    // let pressed = !read_gpio_pa1(); // Active-low with pull-up
+    // if let Some(hal) = get_global_hal() {
+    //     hal.dah_pin.on_interrupt(pressed);
+    // }
 }
 
 /// CH32V203-specific timing utilities
