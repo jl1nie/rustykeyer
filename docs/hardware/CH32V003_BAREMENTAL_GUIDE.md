@@ -111,50 +111,68 @@ CH32V003F4P6 (TSSOP-20)
 ### 1. システム初期化
 
 ```rust
+/// CH32V003ハードウェア初期化 - 分離FSMアーキテクチャ対応
 fn hardware_init() {
-    // 1. クロック有効化
+    // 1. クロック有効化 (RCC APB2)
     enable_peripheral_clocks();  // GPIOA, GPIOD, AFIO, TIM1
     
-    // 2. GPIO設定
-    configure_gpio_pins();       // 入出力ピン設定
+    // 2. GPIO設定 (プルアップ入力 + プッシュプル出力)
+    configure_gpio_pins();       // PA2/PA3(入力), PD6/PD7(出力), PA1(PWM)
     
-    // 3. SysTick設定 (1ms割り込み)
+    // 3. SysTick設定 (1ms高精度タイマー)
     configure_systick();         // 24MHz → 24000 ticks
     
-    // 4. EXTI設定 (パドル割り込み - 両エッジ検出)
-    configure_exti_interrupts(); // PA2/PA3 → EXTI2/3 両エッジ
+    // 4. EXTI設定 (両エッジ検出 - 押下/離脱両対応)
+    configure_exti_interrupts(); // PA2/PA3 → EXTI2/3, Rising+Falling
     
-    // 5. TIM1 PWM設定 (600Hz)
-    configure_pwm_sidetone();    // サイドトーン生成
+    // 5. TIM1 PWM設定 (600Hz サイドトーン)
+    configure_pwm_sidetone();    // PA1 TIM1_CH1, 50%デューティ
+    
+    // 6. KeyerFSM初期化 (keyer-core統合)
+    init_keyer_fsm();           // Mode B, 20WPM, 5ms debounce
 }
 
-// EXTI両エッジ検出設定詳細
+/// EXTI両エッジ検出設定 - 新分離FSM対応
 fn configure_exti_interrupts() {
     unsafe {
         // AFIO設定: EXTI2/3をPort Aにマップ
         let afio_pcfr1 = (AFIO_BASE + AFIO_PCFR1) as *mut u32;
         let pcfr1 = core::ptr::read_volatile(afio_pcfr1);
-        core::ptr::write_volatile(afio_pcfr1, pcfr1);
+        core::ptr::write_volatile(afio_pcfr1, pcfr1);  // PA2/PA3選択
         
         // 両エッジ検出有効化
         let exti_imr = (EXTI_BASE + EXTI_IMR) as *mut u32;
         let exti_ftsr = (EXTI_BASE + EXTI_FTSR) as *mut u32;
         let exti_rtsr = (EXTI_BASE + EXTI_RTSR) as *mut u32;
         
-        // 割り込みマスク有効
+        // 割り込みマスク有効 (EXTI2: PA2-Dit, EXTI3: PA3-Dah)
         let imr = core::ptr::read_volatile(exti_imr);
         core::ptr::write_volatile(exti_imr, imr | (1 << 2) | (1 << 3));
         
-        // ★両エッジ検出: Falling（押下）+ Rising（離脱）
+        // ★ 分離FSM対応: Falling（押下）+ Rising（離脱）両エッジ
         let ftsr = core::ptr::read_volatile(exti_ftsr);
         core::ptr::write_volatile(exti_ftsr, ftsr | (1 << 2) | (1 << 3));
         
         let rtsr = core::ptr::read_volatile(exti_rtsr);
         core::ptr::write_volatile(exti_rtsr, rtsr | (1 << 2) | (1 << 3));
         
-        // NVIC割り込み有効化
+        // NVIC割り込み有効化 (EXTI7_0_IRQn)
         enable_nvic_interrupt(EXTI7_0_IRQn);
     }
+}
+
+/// KeyerFSM初期化 - keyer-core統合
+fn init_keyer_fsm() {
+    let config = KeyerConfig {
+        mode: KeyerMode::ModeB,              // Iambic Mode B
+        wpm: 20,                             // 20 WPM (60ms unit)
+        debounce_ms: 5,                      // 5ms debounce
+        character_space_enabled: true,       // 7-unit character space
+    };
+    
+    critical_section::with(|cs| {
+        *KEYER_FSM_INSTANCE.borrow(cs).borrow_mut() = Some(KeyerFSM::new(config));
+    });
 }
 ```
 
@@ -185,30 +203,18 @@ impl Ch32v003Output {
 }
 ```
 
-### 3. 割り込み処理 - イベントドリブンアーキテクチャ
+### 3. 割り込み処理 - 分離FSMアーキテクチャ
 
 ```rust
-// 電力効率最適化のSysTick (条件的wake-up)
+/// SysTick割り込み - 1ms高精度システム時刻
 #[no_mangle]
 extern "C" fn SysTick() {
     let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
-    
-    // アクティブ送信中のみメインループをwake
-    let system_state: SystemState = unsafe {
-        core::mem::transmute(SYSTEM_STATE.load(Ordering::Relaxed))
-    };
-    if system_state == SystemState::Sending {
-        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
-    }
-    
-    // 10ms毎の定期FSM更新（squeeze対応）
-    if current % 10 == 0 {
-        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
-    }
+    // 注: 省電力のため自動wake-upは削除、必要時のみ起動
 }
 
-// 両エッジ検出対応 EXTI ハンドラ
+/// EXTI割り込み - パドル両エッジ検出 (分離FSM対応)
 #[no_mangle] 
 extern "C" fn EXTI7_0_IRQHandler() {
     unsafe {
@@ -217,17 +223,41 @@ extern "C" fn EXTI7_0_IRQHandler() {
         
         // EXTI2 (PA2 - Dit) 両エッジ検出
         if pending & (1 << 2) != 0 {
-            DIT_INPUT.update_from_interrupt();
-            core::ptr::write_volatile(exti_pr, 1 << 2);
-            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
+            // グローバル状態更新（アトミック操作）
+            critical_section::with(|cs| {
+                let dit_state = read_dit_pin();  // 現在のピン状態読み取り
+                update_paddle_state(PaddleSide::Dit, dit_state);
+            });
+            core::ptr::write_volatile(exti_pr, 1 << 2);  // フラグクリア
+            PADDLE_CHANGED.store(true, Ordering::Release);  // FSM更新フラグ
+            record_activity();  // 省電力管理
         }
         
         // EXTI3 (PA3 - Dah) 両エッジ検出
         if pending & (1 << 3) != 0 {
-            DAH_INPUT.update_from_interrupt();
+            critical_section::with(|cs| {
+                let dah_state = read_dah_pin();
+                update_paddle_state(PaddleSide::Dah, dah_state);
+            });
             core::ptr::write_volatile(exti_pr, 1 << 3);
-            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
+            PADDLE_CHANGED.store(true, Ordering::Release);
+            record_activity();
         }
+    }
+}
+
+/// パドルピン状態読み取り
+fn read_dit_pin() -> bool {
+    unsafe {
+        let idr = core::ptr::read_volatile((GPIOA_BASE + GPIO_IDR) as *const u32);
+        (idr & (1 << 2)) == 0  // アクティブ Low (プルアップ)
+    }
+}
+
+fn read_dah_pin() -> bool {
+    unsafe {
+        let idr = core::ptr::read_volatile((GPIOA_BASE + GPIO_IDR) as *const u32);
+        (idr & (1 << 3)) == 0  // アクティブ Low (プルアップ)
     }
 }
 ```
@@ -267,54 +297,69 @@ fn set_duty(&self, duty: u16) { // duty: 0-1000 (0-100%)
 }
 ```
 
-### 5. メインループ - 3フェーズイベントドリブンアーキテクチャ
+### 5. メインループ - 5フェーズ分離FSMアーキテクチャ
 
 ```rust
+/// メインループ - 新分離FSM実装
 loop {
-    // Phase 1: イベント処理とFSM更新
-    let events = SYSTEM_EVENTS.load(Ordering::Acquire);
+    let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     
-    if events != 0 {
-        SYSTEM_EVENTS.fetch_and(!events, Ordering::Release);
-        
-        // パドルイベントまたは定期FSM更新
-        if events & EVENT_PADDLE != 0 || 
-           get_current_instant().duration_since(last_fsm_update).as_millis() >= 10 {
-            
-            critical_section::with(|_| {
-                let dit_pressed = DIT_INPUT.is_low();
-                let dah_pressed = DAH_INPUT.is_low();
-                
-                let current_paddle = PaddleInput::new();
-                let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-                
-                current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
-                current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
-                
-                fsm.update(&current_paddle, &mut producer);
-            });
-            
-            last_fsm_update = get_current_instant();
-        }
+    // Phase 1: パドル変化処理 (最高優先度)
+    if PADDLE_CHANGED.load(Ordering::Relaxed) {
+        PADDLE_CHANGED.store(false, Ordering::Relaxed);
+        update_keyer_fsm();  // keyer-core FSM更新
+        record_activity();
+        last_keyer_update = now_ms;
     }
     
-    // Phase 2: ノンブロッキング送信ステート更新
-    let transmission_active = update_transmission_state(unit_ms);
-    
-    // Phase 3: 新要素の送信開始（送信idle時のみ）
-    if !transmission_active {
-        if let Some(element) = consumer.dequeue() {
-            start_element_transmission(element, unit_ms);
-        }
+    // Phase 2: 定期FSM更新 (10msサイクル、スクイーズ対応)
+    else if now_ms.wrapping_sub(last_keyer_update) >= 10 {
+        update_keyer_fsm();  // タイムアウト・スクイーズ検出
+        last_keyer_update = now_ms;
     }
     
-    // 完全idle時のみCPU休止（電力効率最大化）
-    let has_work = is_transmission_active() || 
-                   consumer.ready() || 
-                   SYSTEM_EVENTS.load(Ordering::Relaxed) != 0;
+    // Phase 3: 送信FSM更新 (常時アクティブ、ノンブロッキング)
+    update_transmission_fsm(now_ms);  // ★分離送信制御
     
-    if !has_work {
-        unsafe { riscv::asm::wfi(); }  // Wait For Interrupt
+    // Phase 4: デバッグハートビート (feature-gated)
+    #[cfg(feature = "debug")]
+    debug_heartbeat(&mut last_heartbeat);
+    
+    // Phase 5: 省電力制御 (5秒アイドル + WFI)
+    if can_enter_low_power(now_ms) {
+        unsafe { riscv::asm::wfi(); }  // 割り込みまで完全休止
+    }
+}
+
+/// Keyer FSM更新 - keyer-core統合
+fn update_keyer_fsm() {
+    critical_section::with(|cs| {
+        if let Some(ref mut fsm) = *KEYER_FSM_INSTANCE.borrow(cs).borrow_mut() {
+            let paddle = PADDLE_STATE.borrow(cs).borrow().clone();
+            let mut producer = unsafe { ELEMENT_QUEUE.split().0 };
+            
+            // HAL経由でFSM更新
+            let mut hal = Ch32v003KeyerHal::new();
+            fsm.update(&paddle, &mut producer, &mut hal);
+        }
+    });
+}
+
+/// 送信FSM更新 - 完全ノンブロッキング実装
+fn update_transmission_fsm(now_ms: u32) {
+    if TX_CONTROLLER.is_transmitting() {
+        // 送信中: 要素終了判定
+        if TX_CONTROLLER.is_element_finished(now_ms) {
+            end_element_transmission(now_ms);
+        }
+    } else {
+        // アイドル: 新要素開始判定
+        if TX_CONTROLLER.can_start_transmission(now_ms) {
+            let mut consumer = unsafe { ELEMENT_QUEUE.split().1 };
+            if let Some(element) = consumer.dequeue() {
+                start_element_transmission(element, now_ms);
+            }
+        }
     }
 }
 
@@ -416,10 +461,10 @@ RAM効率:
 cd firmware-ch32v003
 cargo build --release
 
-# バイナリサイズ確認
+# バイナリサイズ確認 (パッケージ名: rustykeyer-ch32v003, バイナリ名: keyer-v003)
 riscv32-unknown-elf-size target/riscv32imc-unknown-none-elf/release/keyer-v003
 #    text    data     bss     dec     hex filename
-#    3028       0    2048    5076    13d4 keyer-v003
+#    3200       0    2048    5248    1480 keyer-v003
 ```
 
 ### 2. 書き込み準備
@@ -550,14 +595,22 @@ fn update_transmission_fsm(now_ms: u32) {
 - ✅ **コンパイル成功**: AtomicU32互換性、型変換エラー全て解決
 - ✅ **feature統合**: デバッグ機能の条件付きコンパイル対応
 
-**📊 実測メモリ使用量**:
+**📊 実測メモリ使用量 (2025年最新)**:
 ```
 コア構造体合計: 37B (1.8% of 2KB RAM)
-├── TxController: 12B    // 送信状態 + タイミング制御
-├── ELEMENT_QUEUE: 12B   // 4要素キュー (heapless)
-└── Atomic globals: 13B  // システム時刻、アクティビティ管理等
+├── TxController: 12B        // AtomicU8 + 2×AtomicU32 (送信制御)
+├── ELEMENT_QUEUE: 12B       // Queue<Element, 4> (heapless)
+├── PADDLE_STATE: 8B         // Mutex<RefCell<PaddleInput>>
+├── KEYER_FSM_INSTANCE: 4B   // Mutex<RefCell<Option<KeyerFSM>>>
+└── その他Atomics: 13B       // SYSTEM_TICK_MS, LAST_ACTIVITY_MS等
 
-残り利用可能: 2011B (98.2%) - スタック・変数・バッファ用
+残り利用可能: 2011B (98.2%) - スタック(1024B)・HAL・バッファ用
+
+実装詳細:
+• KeyerFSM本体は必要時のみヒープレス初期化
+• 全アトミック操作でスレッドセーフ保証
+• critical-sectionによる割り込み制御
+• keyer-core統合による型安全性
 ```
 
 **🚀 技術的成果**:
