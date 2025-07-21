@@ -338,9 +338,8 @@ fn update_keyer_fsm() {
             let paddle = PADDLE_STATE.borrow(cs).borrow().clone();
             let mut producer = unsafe { ELEMENT_QUEUE.split().0 };
             
-            // HAL経由でFSM更新
-            let mut hal = Ch32v003KeyerHal::new();
-            fsm.update(&paddle, &mut producer, &mut hal);
+            // keyer-core FSM更新（HALパラメータ不要）
+            fsm.update(&paddle, &mut producer);
         }
     });
 }

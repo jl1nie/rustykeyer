@@ -12,9 +12,7 @@ use crate::controller::{PaddleInput};
 use crate::fsm::KeyerFSM;
 #[cfg(test)]
 use heapless::spsc::Queue;
-#[cfg(feature = "embassy-time")]
-#[cfg(test)]
-use embassy_time;
+// Embassy-time removed for test compatibility
 
 #[test]
 fn test_mock_paddle_basic_operations() {
@@ -447,11 +445,11 @@ fn test_squeeze_timing_boundaries() {
     paddle.update(PaddleSide::Dit, true, time2);
     paddle.update(PaddleSide::Dah, true, time2 + 5);
     
-    let sent2 = fsm.update(&paddle, &mut producer);
+    let _sent2 = fsm.update(&paddle, &mut producer);
     
     // Should handle additional elements (may be 0 if FSM is in different state)
     // The key test is that FSM accepts the input without errors
-    assert!(sent2 >= 0);
+    // Note: sent2 is usize, so always >= 0
     
     // Verify element sequence
     assert!(consumer.ready());

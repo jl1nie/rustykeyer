@@ -131,7 +131,7 @@ pub mod paddle_simulator {
         }
         
         /// Create a squeeze pattern (both paddles)
-        pub fn squeeze(unit: Duration, duration: Duration) -> Self {
+        pub fn squeeze(_unit: Duration, duration: Duration) -> Self {
             Self {
                 events: Vec::from_slice(&[
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dit, pressed: true },
@@ -376,7 +376,7 @@ pub mod test_scenarios {
     use heapless::{Vec, String};
     
     /// Generate test scenario for CQ calling
-    pub fn cq_call_pattern(unit: Duration) -> PaddlePattern {
+    pub fn cq_call_pattern(_unit: Duration) -> PaddlePattern {
         // CQ CQ CQ = (-.-. --.- / -.-. --.- / -.-. --.-) 
         PaddlePattern {
             events: Vec::from_slice(&[
@@ -389,7 +389,7 @@ pub mod test_scenarios {
     }
     
     /// Contest-style rapid input
-    pub fn contest_pattern(unit: Duration) -> PaddlePattern {
+    pub fn contest_pattern(_unit: Duration) -> PaddlePattern {
         PaddlePattern {
             events: Vec::new(),
             description: String::try_from("Contest rapid input").unwrap(),
