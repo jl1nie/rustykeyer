@@ -157,18 +157,18 @@ PD7 - Status LED (Push-pull)
 
 ## 📖 ドキュメント
 
-### 📚 主要ドキュメント
-- **[CH32V003 ベアメタル実装詳細](docs/hardware/CH32V003_BAREMENTAL_GUIDE.md)** - 完全実装ガイド
-- **[回路図・TLP785設計](docs/hardware/CH32V003_CIRCUIT_DIAGRAM.md)** - フォトカプラー安全接続
+### 🚀 クイックスタート
+- **[CH32V003 ベアメタル実装ガイド](docs/hardware/CH32V003_BAREMENTAL_GUIDE.md)** - V003完全実装詳細
+- **[CH32V003/V203 回路図](docs/hardware/CH32V003_CIRCUIT_DIAGRAM.md)** - TLP785設計・両プラットフォーム対応
+
+### 📚 技術仕様・API
 - **[keyer-core API リファレンス](docs/api/keyer-core-api.md)** - コアライブラリ完全仕様
+- **[要件仕様](.kiro/specs/keyer-main/requirements.md)** - 機能要件・動作仕様  
+- **[技術設計](.kiro/specs/keyer-main/design.md)** - アーキテクチャ詳細
 
-### 🎯 設計仕様書 (Kiro)
-- [要件仕様](.kiro/specs/keyer-main/requirements.md) - 機能要件・動作仕様
-- [技術設計](.kiro/specs/keyer-main/design.md) - アーキテクチャ詳細
-- [実装状況](.kiro/specs/keyer-main/tasks.md) - 進捗管理
-
-### 📋 セッション記録
-- [開発記録](docs/archive/) - 実装過程の詳細記録
+### 📊 プロジェクト管理
+- **[実装進捗](.kiro/specs/keyer-main/tasks.md)** - Phase 4完了状況
+- **[開発セッション記録](docs/archive/)** - 実装過程の詳細記録
 
 ## ⚙️ キーヤーモード
 
@@ -180,48 +180,19 @@ PD7 - Status LED (Push-pull)
 
 ## 🎉 実装ステータス
 
-<div align="center">
+### ✅ **Phase 4 完了** - ノンブロッキング送信FSM対応 (2025-01-21)
 
-### ✅ **PHASE 4 COMPLETE** 🚀
-#### *Non-blocking Transmission FSM Achievement* (2025-01-21)
+**主要成果**:
+- 🟢 **CH32V003/V203 両対応完了** - ベアメタル + Embassy実装
+- 🟢 **完全テスト合格** - 21/21 HAL抽象化・スクイーズ検証  
+- 🟢 **製品化レベル達成** - TLP785絶縁、電力効率80%改善、プロ仕様squeeze対応
 
-</div>
+**性能実績**: Flash 1,070B (93%節約) / RAM 2KB完全活用 / 1ms精度 / 5000V絶縁
 
-### 🏆 主要達成
-- ✅ **CH32V003 ベアメタル実装成功** - 実GPIO・割り込み・PWM完全制御
-- ✅ **Embassy vs ベアメタル** - 用途別最適実装完成  
-- ✅ **TLP785完全絶縁** - 5000Vrms無線機安全接続
-- ✅ **21/21 テスト合格** - HAL抽象化・スクイーズ動作完全検証
-- ✅ **メモリ効率達成** - Flash 83%削減、RAM 90%削減
-- ✅ **製品化レベル品質** - 総部品コスト$5で商用性能
-- ✅ **電力効率革命** - イベントドリブンでアイドル80%削減 (5-8mA→1-2mA)
-- ✅ **真のスクイーズ対応** - ノンブロッキング送信FSMでプロ仕様実現
+## 🚧 次のステップ
 
-### 📊 性能指標達成
-
-| 項目 | 目標 | 実測値 | 状態 |
-|------|------|--------|------|
-| Flash使用量 | <4KB | 1,070B | 🟢 大幅達成 |
-| RAM使用量 | ≤2KB | 2,048B | 🟢 完璧適合 |
-| システム精度 | 1ms | 1ms | ✅ SysTick |
-| 割り込み応答 | <10μs | 実装済み | ✅ EXTI |
-| テスト合格率 | >95% | 21/21 | ✅ 100% |
-| 絶縁性能 | >1000V | 5000V | ✅ TLP785 |
-| 電力効率 | - | 80%削減 | 🟢 **NEW!** |
-| スクイーズ対応 | プロ仕様 | 完全実装 | 🟢 **LATEST!** |
-
-## 🚧 今後の拡張
-
-### Phase 4: 実機検証
-- [ ] 実機配線・書き込みテスト  
-- [ ] パドル入力→キー出力検証
-- [ ] サイドトーン音声確認
-- [ ] 動作パラメータ最終調整
-
-### Phase 5: 製品化準備
-- [ ] WPM動的調整機能
-- [ ] EEPROM設定保存
-- [ ] 省電力モード対応
+**Phase 5: 実機検証** - 実機配線・動作確認・パラメータ調整  
+**Phase 6: 製品化** - WPM調整・設定保存・省電力最適化
 
 ## 📜 ライセンス
 
