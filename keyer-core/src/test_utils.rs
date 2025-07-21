@@ -189,7 +189,7 @@ pub mod paddle_simulator {
     pub fn execute_pattern(paddle: &PaddleInput, pattern: &PaddlePattern, debounce_ms: u64) {
         for event in &pattern.events {
             // In real test, this would use virtual time
-            paddle.update(event.side, event.pressed, debounce_ms);
+            paddle.update(event.side, event.pressed, debounce_ms as u32);
         }
     }
 }

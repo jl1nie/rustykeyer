@@ -1,52 +1,108 @@
 #![no_std]
 #![no_main]
 
-use defmt::*;
+#[cfg(feature = "defmt")]
+use defmt::{debug, info, warn};
+#[cfg(feature = "defmt")]
 use defmt_rtt as _;
-use panic_probe as _;
+use panic_halt as _;
+
+// Define simple logging macros when defmt is not available
+#[cfg(not(feature = "defmt"))]
+macro_rules! info {
+    ($($arg:tt)*) => {};
+}
+
+#[cfg(not(feature = "defmt"))]
+macro_rules! debug {
+    ($($arg:tt)*) => {};
+}
+
+#[cfg(not(feature = "defmt"))]
+macro_rules! warn {
+    ($($arg:tt)*) => {};
+}
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender, Receiver};
 
-use ch32_hal::gpio::{Input, Output, Level, Pull, Speed, OutputType};
-use ch32_hal::time::Hertz;
-use ch32_hal::timer::simple_pwm::{SimplePwm, PwmPin};
-use ch32_hal::exti::Exti;
-use ch32_hal::{bind_interrupts, peripherals, rcc};
+// Mock CH32V003 HAL for Embassy footprint testing
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use keyer_core::*;
+use keyer_core::{*, evaluator_task};
 use static_cell::StaticCell;
 use heapless::spsc::Queue;
 
 // Static resources
 static PADDLE: PaddleInput = PaddleInput::new();
-static ELEMENT_QUEUE: StaticCell<Queue<Element, 64>> = StaticCell::new();
-static SIDETONE_CHANNEL: Channel<ThreadModeRawMutex, SidetoneCommand, 8> = Channel::new();
+static ELEMENT_QUEUE: StaticCell<Queue<Element, 8>> = StaticCell::new();
+static SIDETONE_CHANNEL: Channel<CriticalSectionRawMutex, SidetoneCommand, 8> = Channel::new();
 
-// Bind interrupts
-bind_interrupts!(struct Irqs {
-    EXTI_LINE1 => ch32_hal::exti::ExtiInterruptHandler<ch32_hal::peripherals::EXTI_LINE1>;
-    EXTI_LINE2 => ch32_hal::exti::ExtiInterruptHandler<ch32_hal::peripherals::EXTI_LINE2>;
-});
+// Mock GPIO types for Embassy footprint testing
+struct MockInput {
+    state: AtomicBool,
+}
 
-/// CH32V003 Hardware implementation
+struct MockOutput {
+    state: AtomicBool,
+}
+
+struct MockPwm;
+
+impl MockInput {
+    fn new() -> Self {
+        Self { state: AtomicBool::new(false) }
+    }
+    
+    fn is_low(&self) -> bool {
+        !self.state.load(Ordering::Relaxed)
+    }
+}
+
+impl MockOutput {
+    fn new() -> Self {
+        Self { state: AtomicBool::new(false) }
+    }
+    
+    fn set_high(&self) {
+        self.state.store(true, Ordering::Relaxed);
+    }
+    
+    fn set_low(&self) {
+        self.state.store(false, Ordering::Relaxed);
+    }
+    
+    fn is_set_high(&self) -> bool {
+        self.state.load(Ordering::Relaxed)
+    }
+}
+
+impl MockPwm {
+    fn new() -> Self { Self }
+    fn set_duty(&mut self, _duty: u16) {}
+    fn enable(&mut self) {}
+    fn get_max_duty(&self) -> u16 { 1000 }
+    fn set_frequency(&mut self, _freq: u32) {}
+}
+
+/// CH32V003 Hardware implementation (Mock for footprint testing)
 struct Ch32v003Hal {
-    dit_input: Input<'static, peripherals::PA2>,
-    dah_input: Input<'static, peripherals::PA3>,
-    key_output: Output<'static, peripherals::PD6>,
-    status_led: Output<'static, peripherals::PD7>,
-    sidetone_sender: Sender<'static, ThreadModeRawMutex, SidetoneCommand, 8>,
+    dit_input: MockInput,
+    dah_input: MockInput,
+    key_output: MockOutput,
+    status_led: MockOutput,
+    sidetone_sender: Sender<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
 }
 
 impl Ch32v003Hal {
     fn new(
-        dit_input: Input<'static, peripherals::PA2>,
-        dah_input: Input<'static, peripherals::PA3>,
-        key_output: Output<'static, peripherals::PD6>,
-        status_led: Output<'static, peripherals::PD7>,
-        sidetone_sender: Sender<'static, ThreadModeRawMutex, SidetoneCommand, 8>,
+        dit_input: MockInput,
+        dah_input: MockInput,
+        key_output: MockOutput,
+        status_led: MockOutput,
+        sidetone_sender: Sender<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
     ) -> Self {
         Self {
             dit_input,
@@ -62,7 +118,7 @@ impl InputPaddle for Ch32v003Hal {
     type Error = HalError;
 
     fn is_pressed(&mut self) -> Result<bool, Self::Error> {
-        // PA2 (Dit) and PA3 (Dah) are active low (pulled up, pressed = low)
+        // Mock implementation - Dit and Dah are active low
         Ok(self.dit_input.is_low() || self.dah_input.is_low())
     }
 
@@ -96,14 +152,16 @@ impl OutputKey for Ch32v003Hal {
             self.status_led.set_high();
             // Send sidetone on command
             if let Err(_) = self.sidetone_sender.try_send(SidetoneCommand::On) {
-                warn!("Sidetone channel full");
+                #[cfg(feature = "defmt")]
+            warn!("Sidetone channel full");
             }
         } else {
             self.key_output.set_low();
             self.status_led.set_low();
             // Send sidetone off command
             if let Err(_) = self.sidetone_sender.try_send(SidetoneCommand::Off) {
-                warn!("Sidetone channel full");
+                #[cfg(feature = "defmt")]
+            warn!("Sidetone channel full");
             }
         }
         Ok(())
@@ -125,39 +183,27 @@ enum SidetoneCommand {
 /// Main firmware entry point
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
+    #[cfg(feature = "defmt")]
     info!("🔧 Rusty Keyer CH32V003 Starting...");
 
-    // Initialize CH32V003 peripherals
-    let mut config = rcc::Config::default();
-    config.hse = None;
-    config.sysclk = Hertz::mhz(48);  // Use internal RC oscillator
-    let p = ch32_hal::init(config);
+    // Mock CH32V003 initialization for Embassy footprint testing
+    #[cfg(feature = "defmt")]
+    info!("⚡ CH32V003 Mock initialized");
 
-    info!("⚡ CH32V003 initialized at 48MHz");
+    // Mock GPIO configuration
+    let dit_input = MockInput::new();
+    let dah_input = MockInput::new();
+    let key_output = MockOutput::new();
+    let status_led = MockOutput::new();
 
-    // Configure GPIO pins
-    let dit_input = Input::new(p.PA2, Pull::Up);
-    let dah_input = Input::new(p.PA3, Pull::Up);
-    let key_output = Output::new(p.PD6, Level::Low, Speed::Low);
-    let status_led = Output::new(p.PD7, Level::Low, Speed::Low);
+    #[cfg(feature = "defmt")]
+    info!("🔌 Mock GPIO configured: Dit=PA2, Dah=PA3, Key=PD6, LED=PD7");
 
-    info!("🔌 GPIO configured: Dit=PA2, Dah=PA3, Key=PD6, LED=PD7");
+    // Mock PWM for sidetone
+    let pwm = MockPwm::new();
 
-    // Configure PWM for sidetone on PC4 (TIM1_CH4)
-    let pwm = SimplePwm::new(
-        p.TIM1,
-        Some(PwmPin::new_ch4(p.PC4, OutputType::PushPull)),
-        None,
-        None,
-        None,
-        Hertz::hz(600),  // Default 600Hz sidetone
-        &mut config,
-    );
-
-    // Configure EXTI for paddle interrupts
-    let mut exti = Exti::new(p.EXTI, Irqs);
-    exti.listen(ch32_hal::exti::ExtiLine::Line2, ch32_hal::exti::Edge::Both);
-    exti.listen(ch32_hal::exti::ExtiLine::Line3, ch32_hal::exti::Edge::Both);
+    #[cfg(feature = "defmt")]
+    info!("🎵 Mock PWM configured for sidetone");
 
     // Initialize keyer configuration
     let keyer_config = KeyerConfig {
@@ -165,9 +211,10 @@ async fn main(spawner: Spawner) -> ! {
         char_space_enabled: true,
         unit: Duration::from_millis(60), // 20 WPM
         debounce_ms: 5,
-        queue_size: 64,
+        queue_size: 8,
     };
 
+    #[cfg(feature = "defmt")]
     info!("⚙️ Keyer config: {:?} WPM, Mode: {:?}", 
           keyer_config.wpm(), keyer_config.mode);
 
@@ -188,6 +235,7 @@ async fn main(spawner: Spawner) -> ! {
         sidetone_sender,
     );
 
+    #[cfg(feature = "defmt")]
     info!("🚀 Spawning keyer tasks...");
 
     // Spawn keyer tasks
@@ -196,11 +244,13 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(sender_task_ch32(consumer, keyer_config.unit)).unwrap();
     spawner.spawn(sidetone_task(pwm, sidetone_receiver)).unwrap();
 
+    #[cfg(feature = "defmt")]
     info!("✨ Keyer firmware ready!");
 
     // Main supervision loop
     loop {
         Timer::after(Duration::from_secs(10)).await;
+        #[cfg(feature = "defmt")]
         info!("💓 Heartbeat - System running");
     }
 }
@@ -223,17 +273,17 @@ async fn paddle_monitor_task() {
 #[embassy_executor::task]
 async fn evaluator_task_ch32(
     paddle: &'static PaddleInput,
-    producer: heapless::spsc::Producer<'static, Element, 64>,
+    producer: heapless::spsc::Producer<'static, Element, 8>,
     config: KeyerConfig,
 ) {
     info!("🧠 Evaluator task started");
-    evaluator_task(paddle, producer, config).await;
+    evaluator_task::<8>(paddle, producer, config).await;
 }
 
 /// Sender task for CH32V003
 #[embassy_executor::task]
 async fn sender_task_ch32(
-    mut consumer: heapless::spsc::Consumer<'static, Element, 64>,
+    mut consumer: heapless::spsc::Consumer<'static, Element, 8>,
     unit: Duration,
 ) {
     info!("📤 Sender task started");
@@ -264,35 +314,35 @@ async fn sender_task_ch32(
     }
 }
 
-/// Sidetone generation task
+/// Sidetone generation task (Mock implementation)
 #[embassy_executor::task]
 async fn sidetone_task(
-    mut pwm: SimplePwm<'static, peripherals::TIM1>,
-    receiver: Receiver<'static, ThreadModeRawMutex, SidetoneCommand, 8>,
+    mut pwm: MockPwm,
+    receiver: Receiver<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
 ) {
-    info!("🔊 Sidetone task started (600Hz default)");
+    info!("🔊 Mock Sidetone task started (600Hz default)");
     
-    // Set initial PWM duty to 0 (off)
-    pwm.set_duty(ch32_hal::timer::Channel::Ch4, 0);
-    pwm.enable(ch32_hal::timer::Channel::Ch4);
+    // Mock PWM initialization
+    pwm.set_duty(0);
+    pwm.enable();
 
     loop {
         match receiver.receive().await {
             SidetoneCommand::On => {
-                // Set 50% duty cycle for audible tone
+                // Mock PWM on
                 let max_duty = pwm.get_max_duty();
-                pwm.set_duty(ch32_hal::timer::Channel::Ch4, max_duty / 2);
-                debug!("🔊 Sidetone ON");
+                pwm.set_duty(max_duty / 2);
+                debug!("🔊 Mock Sidetone ON");
             }
             SidetoneCommand::Off => {
-                // Set 0% duty cycle for silence
-                pwm.set_duty(ch32_hal::timer::Channel::Ch4, 0);
-                debug!("🔇 Sidetone OFF");
+                // Mock PWM off
+                pwm.set_duty(0);
+                debug!("🔇 Mock Sidetone OFF");
             }
             SidetoneCommand::SetFrequency(freq) => {
-                // Change PWM frequency
-                pwm.set_frequency(Hertz::hz(freq as u32));
-                info!("🎵 Sidetone frequency set to {}Hz", freq);
+                // Mock frequency change
+                pwm.set_frequency(freq as u32);
+                info!("🎵 Mock Sidetone frequency set to {}Hz", freq);
             }
         }
     }

@@ -7,7 +7,7 @@ description = "CH32V203 iambic keyer firmware"
 [dependencies]
 keyer-core = { path = "../keyer-core", features = ["embassy-time"] }
 embassy-executor = { workspace = true, features = ["arch-riscv32", "executor-thread"] }
-embassy-time = { workspace = true, features = ["tick-hz-32_768", "generic-queue"] }
+embassy-time = { workspace = true, features = ["generic-queue-8"] }
 embassy-sync = "0.6"
 embedded-hal = { workspace = true }
 heapless = { workspace = true }
@@ -18,7 +18,7 @@ riscv-rt = "0.11"
 panic-probe = { version = "0.3", features = ["print-defmt"], optional = true }
 panic-halt = "0.2"
 static_cell = "2.1"
-portable-atomic = { version = "1.0", features = ["unsafe-assume-single-core"] }
+portable-atomic = { workspace = true }
 critical-section = { version = "1.1", features = ["restore-state-u8"] }
 embassy-time-driver = "0.1"
 
@@ -36,7 +36,7 @@ name = "rustykeyer_firmware"
 path = "src/lib.rs"
 
 [[bin]]
-name = "keyer"
+name = "keyer-v203"
 path = "src/main.rs"
 test = false
 bench = false

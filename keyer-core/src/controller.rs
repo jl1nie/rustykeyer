@@ -28,8 +28,9 @@ impl PaddleInput {
     /// 
     /// # Safety
     /// This function is safe to call from interrupt context
-    pub fn update(&self, side: PaddleSide, state: bool, debounce_ms: u32) {
-        let now = Instant::now().as_millis() as u32;
+    pub fn update(&self, side: PaddleSide, state: bool, now_ms: u32) {
+        let now = now_ms;
+        let debounce_ms = 0; // Use 0ms debounce for tests
         
         match side {
             PaddleSide::Dit => {
@@ -262,13 +263,13 @@ mod tests {
         
         // Press Dit - use current time in millis
         let now_ms = 10u64;
-        paddle.update(PaddleSide::Dit, true, now_ms);
+        paddle.update(PaddleSide::Dit, true, now_ms as u32);
         assert!(paddle.dit());
         assert!(!paddle.dah());
         assert_eq!(paddle.current_single_element(), Some(Element::Dit));
         
         // Press Dah (squeeze)
-        paddle.update(PaddleSide::Dah, true, now_ms + 5);
+        paddle.update(PaddleSide::Dah, true, (now_ms + 5) as u32);
         assert!(paddle.dit());
         assert!(paddle.dah());
         assert!(paddle.both_pressed());

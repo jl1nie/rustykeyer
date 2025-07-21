@@ -1,8 +1,11 @@
-[target.riscv32ec-unknown-none-elf]
-runner = "probe-rs run --chip ch32v003"
-
 [build]
-target = "riscv32ec-unknown-none-elf"
+target = "riscv32imc-unknown-none-elf"
+
+[target.riscv32imc-unknown-none-elf]
+rustflags = [
+  "-C", "link-arg=-Tmemory.x",
+  "-C", "link-arg=-Tlink.x",
+]
 
 [env]
-DEFMT_LOG = "debug"
+DEFMT_LOG = "info"

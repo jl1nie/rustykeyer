@@ -125,18 +125,18 @@ pub mod tasks {
     #[embassy_executor::task]
     pub async fn evaluator_task_wrapper(
         paddle: &'static PaddleInput,
-        producer: Producer<'static, Element, 64>,
+        producer: Producer<'static, Element, 8>,
         config: KeyerConfig,
     ) {
         #[cfg(feature = "defmt")]
         defmt::info!("🧠 Evaluator task started");
-        keyer_core::fsm::evaluator_task(paddle, producer, config).await;
+        keyer_core::fsm::evaluator_task::<8>(paddle, producer, config).await;
     }
     
     /// Sender task for key output
     #[embassy_executor::task]
     pub async fn sender_task_with_mock(
-        mut consumer: Consumer<'static, Element, 64>,
+        mut consumer: Consumer<'static, Element, 8>,
         unit: Duration,
         key_output: &'static mut crate::mock_hardware::MockKeyOutput,
     ) {

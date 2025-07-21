@@ -29,7 +29,7 @@ impl KeyerFSM {
 
     /// Update FSM state and generate output elements
     /// Returns the number of elements enqueued
-    pub fn update(&mut self, paddle: &PaddleInput, queue: &mut Producer<'_, Element, 64>) -> usize {
+    pub fn update<const N: usize>(&mut self, paddle: &PaddleInput, queue: &mut Producer<'_, Element, N>) -> usize {
         let dit_now = paddle.dit();
         let dah_now = paddle.dah();
         let both_pressed = dit_now && dah_now;
@@ -74,7 +74,7 @@ impl KeyerFSM {
     }
 
     /// Handle Idle state transitions
-    fn handle_idle_state(&mut self, dit_now: bool, dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, 64>) -> usize {
+    fn handle_idle_state<const N: usize>(&mut self, dit_now: bool, dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, N>) -> usize {
         if both_pressed {
             let start_element = self.determine_squeeze_start();
             if queue.enqueue(start_element).is_ok() {
@@ -96,7 +96,7 @@ impl KeyerFSM {
     }
 
     /// Handle DitHold state transitions
-    fn handle_dit_hold_state(&mut self, dit_now: bool, _dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, 64>) -> usize {
+    fn handle_dit_hold_state<const N: usize>(&mut self, dit_now: bool, _dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, N>) -> usize {
         if both_pressed {
             self.state = FSMState::Squeeze(Element::Dit);
             0
@@ -114,7 +114,7 @@ impl KeyerFSM {
     }
 
     /// Handle DahHold state transitions
-    fn handle_dah_hold_state(&mut self, _dit_now: bool, dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, 64>) -> usize {
+    fn handle_dah_hold_state<const N: usize>(&mut self, _dit_now: bool, dah_now: bool, both_pressed: bool, queue: &mut Producer<'_, Element, N>) -> usize {
         if both_pressed {
             self.state = FSMState::Squeeze(Element::Dah);
             0
@@ -132,7 +132,7 @@ impl KeyerFSM {
     }
 
     /// Handle Squeeze state transitions
-    fn handle_squeeze_state(
+    fn handle_squeeze_state<const N: usize>(
         &mut self,
         dit_now: bool,
         dah_now: bool,
@@ -140,7 +140,7 @@ impl KeyerFSM {
         both_released: bool,
         last_element: Element,
         now: Instant,
-        queue: &mut Producer<'_, Element, 64>
+        queue: &mut Producer<'_, Element, N>
     ) -> usize {
         if both_pressed {
             // Continue squeeze - send alternating element
@@ -169,7 +169,7 @@ impl KeyerFSM {
     }
 
     /// Handle MemoryPending state
-    fn handle_memory_pending_state(&mut self, memory_element: Element, now: Instant, queue: &mut Producer<'_, Element, 64>) -> usize {
+    fn handle_memory_pending_state<const N: usize>(&mut self, memory_element: Element, now: Instant, queue: &mut Producer<'_, Element, N>) -> usize {
         if queue.enqueue(memory_element).is_ok() {
             // Memory element sent, clear SuperKeyer history and transition
             if self.config.mode == KeyerMode::SuperKeyer {
@@ -183,14 +183,14 @@ impl KeyerFSM {
     }
 
     /// Handle CharSpacePending state
-    fn handle_char_space_pending_state(
+    fn handle_char_space_pending_state<const N: usize>(
         &mut self,
         dit_now: bool,
         dah_now: bool,
         both_pressed: bool,
         start_time: Instant,
         now: Instant,
-        queue: &mut Producer<'_, Element, 64>
+        queue: &mut Producer<'_, Element, N>
     ) -> usize {
         let elapsed = now.duration_since(start_time);
         let char_space_duration = self.config.char_space_duration();
@@ -296,9 +296,9 @@ impl KeyerFSM {
 
 /// Async task for running the FSM evaluator
 #[cfg(feature = "embassy-time")]
-pub async fn evaluator_task(
+pub async fn evaluator_task<const N: usize>(
     paddle: &PaddleInput,
-    mut queue_producer: Producer<'_, Element, 64>,
+    mut queue_producer: Producer<'_, Element, N>,
     config: KeyerConfig,
 ) {
     use embassy_time::Timer;
@@ -316,6 +316,7 @@ pub async fn evaluator_task(
         Timer::after(update_interval).await;
     }
 }
+
 
 // Skip tests that require embassy-time runtime for now
 // Will be tested in integration tests with proper time driver setup

@@ -1,4 +1,4 @@
-//! Simple embassy time driver for CH32V003
+//! Simple embassy time driver for CH32V203
 
 use embassy_time_driver::{AlarmHandle, Driver};
 use portable_atomic::{AtomicU32, Ordering};

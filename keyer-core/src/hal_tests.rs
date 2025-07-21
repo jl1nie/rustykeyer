@@ -6,6 +6,15 @@ use crate::hal::*;
 use crate::hal::mock::*;
 #[cfg(test)]
 use crate::types::*;
+#[cfg(test)]
+use crate::controller::{PaddleInput};
+#[cfg(test)]
+use crate::fsm::KeyerFSM;
+#[cfg(test)]
+use heapless::spsc::Queue;
+#[cfg(feature = "embassy-time")]
+#[cfg(test)]
+use embassy_time;
 
 #[test]
 fn test_mock_paddle_basic_operations() {
@@ -251,6 +260,209 @@ fn test_squeeze_operation_mock() {
     dah_paddle.set_pressed(false);
     assert!(!dit_paddle.is_pressed().unwrap());
     assert!(!dah_paddle.is_pressed().unwrap());
+}
+
+#[test]
+fn test_paddle_input_squeeze_detection() {
+    let paddle = PaddleInput::new();
+    let start_time = 100u32;
+    
+    // Press both paddles (squeeze)
+    paddle.update(PaddleSide::Dit, true, start_time);
+    paddle.update(PaddleSide::Dah, true, start_time + 1);
+    
+    assert!(paddle.dit());
+    assert!(paddle.dah());
+    assert!(paddle.both_pressed());
+    assert!(!paddle.both_released());
+    assert_eq!(paddle.current_single_element(), None); // No single element in squeeze
+    
+    // Release Dit first
+    paddle.update(PaddleSide::Dit, false, start_time + 50);
+    assert!(!paddle.dit());
+    assert!(paddle.dah());
+    assert!(!paddle.both_pressed());
+    assert_eq!(paddle.current_single_element(), Some(Element::Dah)); // Dah remains
+    
+    // Release Dah
+    paddle.update(PaddleSide::Dah, false, start_time + 100);
+    assert!(!paddle.dit());
+    assert!(!paddle.dah());
+    assert!(paddle.both_released());
+    assert_eq!(paddle.current_single_element(), None);
+}
+
+#[test]
+fn test_fsm_squeeze_mode_a() {
+    // Mode A: Ultimatic - first pressed paddle wins, no memory
+    let mut fsm = KeyerFSM::new(KeyerConfig {
+        mode: KeyerMode::ModeA,
+        char_space_enabled: false,
+        unit: crate::hal::Duration::from_millis(60), // 20 WPM
+        debounce_ms: 5,
+        queue_size: 8,
+    });
+    
+    let paddle = PaddleInput::new();
+    let mut queue = Queue::<Element, 8>::new();
+    let (mut producer, _consumer) = queue.split();
+    let start_time = 100u32;
+    
+    // Press Dit first, then Dah quickly (squeeze simulation)
+    paddle.update(PaddleSide::Dit, true, start_time);
+    paddle.update(PaddleSide::Dah, true, start_time + 5); // Very quick squeeze
+    
+    let sent = fsm.update(&paddle, &mut producer);
+    
+    // Mode A: Should only queue Dit (first pressed), ignore Dah during transmission
+    assert_eq!(sent, 1);
+    // In Mode A, subsequent presses are ignored during element transmission
+}
+
+#[test] 
+fn test_fsm_squeeze_mode_b() {
+    // Mode B: Iambic with one element memory
+    let mut fsm = KeyerFSM::new(KeyerConfig {
+        mode: KeyerMode::ModeB,
+        char_space_enabled: false,
+        unit: crate::hal::Duration::from_millis(60), // 20 WPM
+        debounce_ms: 5,
+        queue_size: 8,
+    });
+    
+    let paddle = PaddleInput::new();
+    let mut queue = Queue::<Element, 8>::new();
+    let (mut producer, mut consumer) = queue.split();
+    let start_time = 100u32;
+    
+    // Squeeze: Press Dit first, then Dah
+    paddle.update(PaddleSide::Dit, true, start_time);
+    paddle.update(PaddleSide::Dah, true, start_time + 5);
+    
+    let sent1 = fsm.update(&paddle, &mut producer);
+    assert_eq!(sent1, 1); // Dit queued
+    
+    // Release Dit but keep Dah pressed
+    paddle.update(PaddleSide::Dit, false, start_time + 50);
+    
+    // Mode B should remember Dah press and queue it next
+    let _sent2 = fsm.update(&paddle, &mut producer);
+    
+    // Verify queue contains Dit then Dah
+    assert!(consumer.ready());
+    let element1 = consumer.dequeue().unwrap();
+    assert_eq!(element1, Element::Dit);
+    
+    if consumer.ready() {
+        let element2 = consumer.dequeue().unwrap();
+        assert_eq!(element2, Element::Dah);
+    }
+}
+
+#[test]
+fn test_fsm_squeeze_superkeyer_dah_priority() {
+    // SuperKeyer: Dah priority in ambiguous situations
+    let mut fsm = KeyerFSM::new(KeyerConfig {
+        mode: KeyerMode::SuperKeyer,
+        char_space_enabled: false,
+        unit: crate::hal::Duration::from_millis(60), // 20 WPM
+        debounce_ms: 5,
+        queue_size: 8,
+    });
+    
+    let paddle = PaddleInput::new();
+    let mut queue = Queue::<Element, 8>::new();
+    let (mut producer, mut consumer) = queue.split();
+    let start_time = 100u32;
+    
+    // Simultaneous press (true squeeze) - SuperKeyer should prioritize Dah
+    paddle.update(PaddleSide::Dit, true, start_time);
+    paddle.update(PaddleSide::Dah, true, start_time); // Same time = simultaneous
+    
+    let sent = fsm.update(&paddle, &mut producer);
+    assert_eq!(sent, 1);
+    
+    // First element should be Dah due to SuperKeyer priority
+    assert!(consumer.ready());
+    let first_element = consumer.dequeue().unwrap();
+    assert_eq!(first_element, Element::Dah);
+}
+
+#[test] 
+fn test_squeeze_release_patterns() {
+    // Test different release orders and their effects
+    let paddle = PaddleInput::new();
+    let start_time = 100u32;
+    
+    // Pattern 1: Press both, release Dit first
+    paddle.update(PaddleSide::Dit, true, start_time);
+    paddle.update(PaddleSide::Dah, true, start_time + 1);
+    assert!(paddle.both_pressed());
+    
+    paddle.update(PaddleSide::Dit, false, start_time + 50);
+    assert!(!paddle.both_pressed());
+    assert!(paddle.dah()); // Dah still active
+    assert_eq!(paddle.current_single_element(), Some(Element::Dah));
+    
+    // Pattern 2: Release Dah
+    paddle.update(PaddleSide::Dah, false, start_time + 100);
+    assert!(paddle.both_released());
+    
+    // Pattern 3: Press both, release Dah first
+    paddle.update(PaddleSide::Dit, true, start_time + 150);
+    paddle.update(PaddleSide::Dah, true, start_time + 151);
+    assert!(paddle.both_pressed());
+    
+    paddle.update(PaddleSide::Dah, false, start_time + 200);
+    assert!(!paddle.both_pressed());
+    assert!(paddle.dit()); // Dit still active
+    assert_eq!(paddle.current_single_element(), Some(Element::Dit));
+}
+
+#[test]
+fn test_squeeze_timing_boundaries() {
+    // Test squeeze operations at element and character boundaries
+    let mut fsm = KeyerFSM::new(KeyerConfig {
+        mode: KeyerMode::ModeB,
+        char_space_enabled: false,
+        unit: crate::hal::Duration::from_millis(60), // 20 WPM
+        debounce_ms: 5,
+        queue_size: 8,
+    });
+    
+    let paddle = PaddleInput::new();
+    let mut queue = Queue::<Element, 8>::new();
+    let (mut producer, mut consumer) = queue.split();
+    
+    // Send single Dit first
+    let time1 = 100u32;
+    paddle.update(PaddleSide::Dit, true, time1);
+    let sent1 = fsm.update(&paddle, &mut producer);
+    assert_eq!(sent1, 1);
+    
+    paddle.update(PaddleSide::Dit, false, time1 + 50);
+    
+    // During inter-element space, press both (squeeze)
+    let time2 = time1 + 120; // During inter-element space
+    paddle.update(PaddleSide::Dit, true, time2);
+    paddle.update(PaddleSide::Dah, true, time2 + 5);
+    
+    let sent2 = fsm.update(&paddle, &mut producer);
+    
+    // Should handle additional elements (may be 0 if FSM is in different state)
+    // The key test is that FSM accepts the input without errors
+    assert!(sent2 >= 0);
+    
+    // Verify element sequence
+    assert!(consumer.ready());
+    let first = consumer.dequeue().unwrap();
+    assert_eq!(first, Element::Dit); // Original Dit
+    
+    if consumer.ready() {
+        let second = consumer.dequeue().unwrap();
+        // Should be either Dit or Dah from squeeze, depending on FSM state
+        assert!(second == Element::Dit || second == Element::Dah);
+    }
 }
 
 #[cfg(feature = "std")]

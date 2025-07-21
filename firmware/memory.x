@@ -14,5 +14,6 @@ REGION_ALIAS("REGION_BSS", RAM);
 REGION_ALIAS("REGION_HEAP", RAM);
 REGION_ALIAS("REGION_STACK", RAM);
 
-/* Stack size - 4KB (ample for Embassy tasks) */
-_stack_size = 4096;
+/* Stack size - 2KB (minimal for Embassy) */
+_hart_stack_size = 2K;
+_max_hart_id = 0;

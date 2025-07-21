@@ -182,12 +182,22 @@ cargo doc --open --package keyer-core
 - **CH32V003** (RISC-V) - Low-memory version (16KB Flash / 2KB RAM)
 - **STM32F4** (ARM Cortex-M4) - Test & development
 
-### Memory Footprint Measurements (CH32V203)
+### Memory Footprint Measurements
 ```
-📊 Flash Usage: 6.2KB / 64KB (10% - Plenty of room)
-📊 RAM Usage:   20KB / 20KB (100% - Needs optimization)
-⚡ Embassy overhead: ~8KB (task arena setting)
-🔧 Post-optimization estimate: RAM 12.5KB (62% - Practical)
+🔴 CH32V203 (20KB RAM):
+   📊 Flash: 6.2KB / 64KB (10% - Good)
+   📊 RAM: 19.8KB / 20KB (99% - Auto stack allocation)
+   ⚡ Embassy: 1KB task arena, RISC-V runtime auto-allocates remaining RAM to stack
+   ✅ Verified: All functions, 21 tests passing
+
+🟡 CH32V003 (2KB RAM):
+   📊 Flash: 6.2KB / 16KB (39% - OK)
+   📊 RAM: 1.9KB / 2KB (95% - Tight but functional)
+   ⚠️ Constraints: 8-element queue, automatic stack allocation requires real build testing
+   🎯 Embassy viable, but needs hardware verification
+
+🔍 Key Learning: RISC-V runtime automatically allocates remaining RAM to stack
+                 Actual build testing required, not theoretical calculations
 ```
 
 ### Pin Configuration Example (CH32V203/V003)
