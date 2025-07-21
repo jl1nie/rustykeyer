@@ -26,6 +26,7 @@
 5. **Phase 5**: モード別ロジック実装 (Tasks 16-18) ✅
 6. **Phase 6**: 統合とテスト (Tasks 19-21) ✅
 7. **Phase 7**: HAL統合テスト (7つのasyncテスト) ✅
+8. **Phase 8**: CH32V003ハードウェア実装 ✅
 
 **テスト結果**:
 - ✅ **HALレベルテスト**: 4つの基本テスト成功
@@ -260,9 +261,76 @@
 4. **品質**: メモリリーク、デッドロック、データ競合がない
 5. **ドキュメント**: コードコメントと使用方法が完備
 
+## 🔧 Phase 8: CH32V003ハードウェア実装
+
+### Task 22: CH32V003 HAL実装 ✅
+- [x] CH32V003専用ファームウェアプロジェクト作成
+  ```
+  firmware-ch32v003/
+  ├── Cargo.toml          - ch32-hal, embassy依存関係
+  ├── src/main.rs         - Embassy非同期ファームウェア
+  ├── .cargo/config.toml  - RISC-V32ECターゲット設定
+  ├── memory.x            - 16KB Flash/2KB RAMメモリレイアウト
+  └── build.rs            - リンカスクリプト処理
+  ```
+- [x] プロトタイプ回路との統合
+  - Dit/Dah入力: PA2/PA3 (プルアップ済み)
+  - キー出力: PD6 → TLP785フォトカプラ
+  - サイドトーン: PC4 PWM → 圧電スピーカ (600Hz)
+  - ステータスLED: PD7
+- [x] Embassy async framework統合
+  - paddle_monitor_task: EXTI割り込み監視
+  - evaluator_task_ch32: FSM評価ラッパー
+  - sender_task_ch32: 要素送出制御
+  - sidetone_task: PWM周波数制御
+- [x] CH32-HAL API統合
+  - GPIO Input/Output設定
+  - SimplePwm timer設定
+  - EXTI external interrupt設定
+  - 48MHz内蔵RC発振器設定
+
+### Task 23: CH32V003メモリ最適化 ✅
+- [x] RISC-V32EC最適化フラグ設定
+  ```toml
+  [profile.release]
+  opt-level = "s"    # サイズ最適化
+  lto = true         # Link Time Optimization
+  debug = 2          # デバッグ情報保持
+  ```
+- [x] Static resource配置最適化
+  - PADDLE: PaddleInput (static)
+  - ELEMENT_QUEUE: Queue<Element, 64> (static)
+  - SIDETONE_CHANNEL: Channel<SidetoneCommand, 8> (static)
+- [x] Stack size制限
+  - Embassy executor: Thread mode
+  - Task stack: 最小限サイズ
+  - Heap不使用 (no_std + StaticCell)
+
+### Task 24: PWMサイドトーン実装 ✅
+- [x] TIM1_CH4 PWM設定 (PC4 pin)
+  ```rust
+  let pwm = SimplePwm::new(
+      p.TIM1,
+      Some(PwmPin::new_ch4(p.PC4, OutputType::PushPull)),
+      Hertz::hz(600),  // デフォルト600Hz
+  );
+  ```
+- [x] 動的周波数変更対応
+  - SidetoneCommand::SetFrequency(u16)
+  - 非同期チャネル経由での制御
+- [x] デューティ比制御
+  - On: 50% duty (max_duty / 2)
+  - Off: 0% duty
+  - 圧電スピーカ最適化
+
 ---
 
-> **実装開始準備**
-> - すべてのタスクは順次実行推奨（依存関係に注意）
-> - 各フェーズ完了時に動作確認を実施
-> - 問題発見時は該当タスクに戻って修正
+> **CH32V003実装状況 (2025-01-21)**
+> - ✅ **ファームウェア構造**: 完全実装済み
+> - ⚠️ **コンパイル確認**: RISC-V toolchain要確認
+> - 📋 **次ステップ**: ハードウェアテスト準備
+> 
+> **注意事項**:
+> - RISC-V32ECは nightly Rust が必要
+> - probe-rs with CH32V003サポート必要
+> - 実機テスト時にタイミング調整が必要な場合あり

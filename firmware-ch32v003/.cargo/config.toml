@@ -1,0 +1,8 @@
+[target.riscv32ec-unknown-none-elf]
+runner = "probe-rs run --chip ch32v003"
+
+[build]
+target = "riscv32ec-unknown-none-elf"
+
+[env]
+DEFMT_LOG = "debug"

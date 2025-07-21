@@ -1,0 +1,47 @@
+[package]
+name = "rustykeyer-ch32v003"
+version = "0.1.0"
+edition = "2021"
+description = "CH32V003 iambic keyer firmware"
+
+[dependencies]
+keyer-core = { path = "../keyer-core", features = ["embassy-time"] }
+ch32-hal = { git = "https://github.com/ch32-rs/ch32-hal", features = ["ch32v003"] }
+embassy-executor = { version = "0.6", features = ["arch-riscv32", "executor-thread"] }
+embassy-time = { version = "0.3", features = ["tick-hz-32_768"] }
+embassy-sync = "0.6"
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+static_cell = "2.1"
+heapless = "0.8"
+
+# Logging and debugging
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+[target.'cfg(target_arch = "riscv32")']
+rustflags = [
+    "-C", "target-cpu=generic-rv32",
+    "-C", "link-arg=-Tlink.x"
+]
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "s"
+panic = "abort"
+
+[profile.dev]
+debug = 2
+panic = "abort"
+opt-level = 1
+
+[[bin]]
+name = "keyer"
+path = "src/main.rs"
+
+[features]
+default = ["sidetone"]
+sidetone = []
+debug-uart = []
