@@ -26,6 +26,7 @@ macro_rules! warn {
 
 // Core imports
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::cell::RefCell;
 use riscv_rt::entry;
 use keyer_core::{
     KeyerFSM, PaddleInput, PaddleSide, KeyerConfig, KeyerMode, Element,
@@ -106,50 +107,120 @@ const SYSTICK_CVR: u32 = 0x08;  // Current Value Register
 // Hardware Abstraction Layer
 // ========================================
 
+// ========================================
+// New Data Structures
+// ========================================
+
 /// System tick counter for timing (updated by SysTick interrupt)
 static SYSTEM_TICK_MS: AtomicU32 = AtomicU32::new(0);
 
 /// System event flags for power-efficient operation
 static SYSTEM_EVENTS: AtomicU32 = AtomicU32::new(0);
 const EVENT_PADDLE: u32 = 0x01;      // Paddle state changed
-const EVENT_TIMER: u32 = 0x02;       // Timer event
-const EVENT_QUEUE: u32 = 0x04;       // Queue needs processing
 
-/// Transmission state machine for non-blocking element sending
-#[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum TransmitState {
-    Idle = 0,        // Ready for next element
-    DitKeyDown = 1,  // Dit transmission active
-    DitSpace = 2,    // Dit inter-element space
-    DahKeyDown = 3,  // Dah transmission active  
-    DahSpace = 4,    // Dah inter-element space
-    CharSpace = 5,   // Character space pause
+/// Transmission controller (12 bytes)
+struct TxController {
+    state: AtomicU8,           // Idle(0) / Transmitting(1)
+    element_end_ms: AtomicU32, // Current element end time
+    next_allowed_ms: AtomicU32, // Next transmission allowed time (space control)
 }
 
-/// System operational state
-#[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum SystemState {
-    Idle = 0,     // Waiting for events
-    Active = 1,   // Processing paddle input
-    Sending = 2,  // Element transmission in progress
+impl TxController {
+    const fn new() -> Self {
+        Self {
+            state: AtomicU8::new(0), // Idle
+            element_end_ms: AtomicU32::new(0),
+            next_allowed_ms: AtomicU32::new(0),
+        }
+    }
+    
+    fn is_idle(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == 0
+    }
+    
+    fn is_transmitting(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == 1
+    }
+    
+    fn set_transmitting(&self, end_time: u32) {
+        self.state.store(1, Ordering::Release);
+        self.element_end_ms.store(end_time, Ordering::Release);
+    }
+    
+    fn set_idle_with_constraint(&self, next_allowed: u32) {
+        self.state.store(0, Ordering::Release);
+        self.next_allowed_ms.store(next_allowed, Ordering::Release);
+    }
+    
+    fn can_start_transmission(&self, now_ms: u32) -> bool {
+        self.is_idle() && now_ms >= self.next_allowed_ms.load(Ordering::Relaxed)
+    }
+    
+    fn is_element_finished(&self, now_ms: u32) -> bool {
+        now_ms >= self.element_end_ms.load(Ordering::Relaxed)
+    }
 }
 
-/// Transmission state and timing
-static TRANSMIT_STATE: AtomicU8 = AtomicU8::new(TransmitState::Idle as u8);
-static TRANSMIT_DEADLINE: AtomicU32 = AtomicU32::new(0);
-static SYSTEM_STATE: AtomicU8 = AtomicU8::new(SystemState::Idle as u8);
-
-/// Paddle state is managed locally in main loop for simplicity
+/// Global state
+static TX_CONTROLLER: TxController = TxController::new();
+static LAST_ACTIVITY_MS: AtomicU32 = AtomicU32::new(0);
+static PADDLE_CHANGED: AtomicBool = AtomicBool::new(false);
+static PADDLE_STATE: critical_section::Mutex<RefCell<PaddleInput>> = 
+    critical_section::Mutex::new(RefCell::new(PaddleInput::new()));
+static KEYER_FSM_INSTANCE: critical_section::Mutex<RefCell<Option<KeyerFSM>>> = 
+    critical_section::Mutex::new(RefCell::new(None));
 
 /// Element queue for FSM communication
 static mut ELEMENT_QUEUE: Queue<Element, 4> = Queue::new();
+
+// ========================================
+// Helper Functions
+// ========================================
 
 /// Get current system time as Instant
 fn get_current_instant() -> Instant {
     let ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     Instant::from_millis(ms as i64)
+}
+
+/// Record activity for power management
+fn record_activity() {
+    let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    LAST_ACTIVITY_MS.store(now_ms, Ordering::Relaxed);
+}
+
+/// Get unit duration in milliseconds (20 WPM = 60ms per unit)
+fn get_unit_duration_ms() -> u32 {
+    60 // Fixed 20 WPM for now
+}
+
+/// Debug logging for transmission (feature-gated)
+#[cfg(feature = "debug")]
+macro_rules! tx_debug {
+    ($($arg:tt)*) => {
+        debug!($($arg)*);
+    };
+}
+
+#[cfg(not(feature = "debug"))]
+macro_rules! tx_debug {
+    ($($arg:tt)*) => {};
+}
+
+/// Initialize keyer FSM
+fn initialize_keyer_fsm() {
+    critical_section::with(|cs| {
+        let config = KeyerConfig {
+            mode: KeyerMode::ModeB,
+            char_space_enabled: true,
+            unit: Duration::from_millis(60),
+            debounce_ms: 5,
+            queue_size: 4,
+        };
+        let fsm = KeyerFSM::new(config);
+        *KEYER_FSM_INSTANCE.borrow(cs).borrow_mut() = Some(fsm);
+    });
+    info!("🎛️ Keyer FSM initialized");
 }
 
 /// CH32V003 GPIO Input implementation with real register access
@@ -365,283 +436,184 @@ impl OutputKey for Ch32v003KeyerHal {
 // Main Application
 // ========================================
 
-#[entry]
-fn main() -> ! {
-    info!("🔧 Rusty Keyer CH32V003 Starting (Bare Metal)...");
+// ========================================
+// New Transmission FSM
+// ========================================
+
+/// Update paddle state from interrupt events
+fn update_paddle_state() {
+    PADDLE_CHANGED.store(false, Ordering::Relaxed);
     
-    // Initialize hardware
-    hardware_init();
+    let dit_pressed = DIT_INPUT.is_low();
+    let dah_pressed = DAH_INPUT.is_low();
+    let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     
-    info!("⚡ CH32V003 Hardware initialized");
+    critical_section::with(|cs| {
+        let paddle = PADDLE_STATE.borrow(cs).borrow_mut();
+        paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
+        paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
+    });
     
-    // Initialize keyer configuration
-    let keyer_config = KeyerConfig {
-        mode: KeyerMode::SuperKeyer,
-        char_space_enabled: true,
-        unit: Duration::from_millis(60), // 20 WPM
-        debounce_ms: 5,
-        queue_size: 4, // Reduced for CH32V003
-    };
+    record_activity();
     
-    info!("⚙️ Keyer config: {:?} WPM, Mode: {:?}", 
-          keyer_config.wpm(), keyer_config.mode);
+    #[cfg(feature = "debug")]
+    {
+        if dit_pressed || dah_pressed {
+            tx_debug!("🎮 Paddle: Dit={}, Dah={}", dit_pressed, dah_pressed);
+        }
+    }
+}
+
+/// Update keyer-core FSM
+fn update_keyer_fsm() {
+    critical_section::with(|cs| {
+        let paddle = PADDLE_STATE.borrow(cs).borrow();
+        
+        if let Some(ref mut fsm) = *KEYER_FSM_INSTANCE.borrow(cs).borrow_mut() {
+            let mut producer = unsafe { ELEMENT_QUEUE.split().0 };
+            fsm.update(&*paddle, &mut producer);
+        }
+    });
     
-    // Initialize FSM and queue
-    let mut fsm = KeyerFSM::new(keyer_config);
-    let (mut producer, mut consumer) = unsafe { ELEMENT_QUEUE.split() };
+    record_activity();
+}
+
+/// Transmission FSM update
+fn update_transmission_fsm(now_ms: u32) {
+    if TX_CONTROLLER.is_transmitting() {
+        if TX_CONTROLLER.is_element_finished(now_ms) {
+            end_element_transmission(now_ms);
+        }
+    } else {
+        if TX_CONTROLLER.can_start_transmission(now_ms) {
+            let mut consumer = unsafe { ELEMENT_QUEUE.split().1 };
+            if let Some(element) = consumer.dequeue() {
+                start_element_transmission(element, now_ms);
+            }
+        }
+    }
+}
+
+/// Start element transmission
+fn start_element_transmission(element: Element, now_ms: u32) {
+    let unit_ms = get_unit_duration_ms();
     
-    info!("🚀 Keyer system ready!");
+    match element {
+        Element::Dit => {
+            KEY_OUTPUT.set_high();
+            STATUS_LED.set_high();
+            SIDETONE_PWM.set_duty(500);
+            TX_CONTROLLER.set_transmitting(now_ms + unit_ms);
+            record_activity();
+            tx_debug!("🟢 Dit start: {}ms", unit_ms);
+        }
+        
+        Element::Dah => {
+            KEY_OUTPUT.set_high();
+            STATUS_LED.set_high();
+            SIDETONE_PWM.set_duty(500);
+            TX_CONTROLLER.set_transmitting(now_ms + (unit_ms * 3));
+            record_activity();
+            tx_debug!("🟢 Dah start: {}ms", unit_ms * 3);
+        }
+        
+        Element::CharSpace => {
+            TX_CONTROLLER.set_idle_with_constraint(now_ms + (unit_ms * 2));
+            record_activity();
+            tx_debug!("⏸️ CharSpace: +{}ms", unit_ms * 2);
+        }
+    }
+}
+
+/// End current element transmission
+fn end_element_transmission(now_ms: u32) {
+    KEY_OUTPUT.set_low();
+    STATUS_LED.set_low();
+    SIDETONE_PWM.set_duty(0);
     
-    // Main application loop - Event Driven Architecture with Non-blocking Transmission
+    let unit_ms = get_unit_duration_ms();
+    TX_CONTROLLER.set_idle_with_constraint(now_ms + unit_ms);
+    
+    tx_debug!("🔴 Element end, space: {}ms", unit_ms);
+}
+
+/// Check if can enter low power mode
+fn can_enter_low_power(now_ms: u32) -> bool {
+    let tx_idle = TX_CONTROLLER.is_idle();
+    let queue_empty = unsafe { ELEMENT_QUEUE.is_empty() };
+    let no_pending_events = SYSTEM_EVENTS.load(Ordering::Relaxed) == 0;
+    let last_activity = LAST_ACTIVITY_MS.load(Ordering::Relaxed);
+    let idle_long_enough = now_ms.saturating_sub(last_activity) >= 5000;
+    
+    tx_idle && queue_empty && no_pending_events && idle_long_enough
+}
+
+/// Debug heartbeat (feature-gated)
+#[cfg(feature = "debug")]
+fn debug_heartbeat(last_heartbeat: &mut Instant) {
+    let now_instant = get_current_instant();
+    if now_instant.duration_since(*last_heartbeat).as_millis() >= 10000 {
+        info!("💓 Heartbeat - Tx: {}, Queue: {}, Activity: {}ms ago", 
+              TX_CONTROLLER.is_transmitting(),
+              unsafe { ELEMENT_QUEUE.len() },
+              now_instant.as_millis() - LAST_ACTIVITY_MS.load(Ordering::Relaxed) as i64);
+        *last_heartbeat = now_instant;
+    }
+}
+
+#[cfg(not(feature = "debug"))]
+fn debug_heartbeat(_last_heartbeat: &mut ()) {}
+
+/// Main execution loop
+fn main_loop() {
+    let mut last_keyer_update = 0u32;
+    
+    #[cfg(feature = "debug")]
     let mut last_heartbeat = get_current_instant();
-    let mut last_fsm_update = get_current_instant();
-    let unit_ms = keyer_config.unit.as_millis() as u32;
+    #[cfg(not(feature = "debug"))]
+    let mut last_heartbeat = ();
+    
+    info!("🚀 Main loop started");
     
     loop {
-        // Phase 1: Handle events and FSM updates
-        let events = SYSTEM_EVENTS.load(Ordering::Acquire);
+        let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
         
-        if events != 0 {
-            // Clear processed events
-            SYSTEM_EVENTS.fetch_and(!events, Ordering::Release);
-            
-            // Handle paddle events or periodic FSM update
-            if events & EVENT_PADDLE != 0 || 
-               get_current_instant().duration_since(last_fsm_update).as_millis() >= 10 {
-                
-                critical_section::with(|_| {
-                    // Read current paddle state safely
-                    let dit_pressed = DIT_INPUT.is_low();
-                    let dah_pressed = DAH_INPUT.is_low();
-                    
-                    // Create temporary paddle state for FSM
-                    let current_paddle = PaddleInput::new();
-                    let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-                    
-                    // Update paddle state based on current GPIO readings
-                    current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
-                    current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
-                    
-                    // Update keyer-core FSM (generates Elements)
-                    fsm.update(&current_paddle, &mut producer);
-                });
-                
-                last_fsm_update = get_current_instant();
-            }
+        // Phase 1: Paddle change processing (highest priority)
+        if PADDLE_CHANGED.load(Ordering::Relaxed) {
+            update_paddle_state();
+            update_keyer_fsm();
+            last_keyer_update = now_ms;
         }
         
-        // Phase 2: Update transmission state machine
-        let transmission_active = update_transmission_state(unit_ms);
-        
-        // Phase 3: Start new element if transmission is idle
-        if !transmission_active {
-            if let Some(element) = consumer.dequeue() {
-                start_element_transmission(element, unit_ms);
-            }
+        // Phase 2: Periodic FSM update (10ms cycle)
+        else if now_ms.wrapping_sub(last_keyer_update) >= 10 {
+            update_keyer_fsm();
+            last_keyer_update = now_ms;
         }
         
-        // Heartbeat every 10 seconds
-        let now = get_current_instant();
-        if now.duration_since(last_heartbeat).as_millis() >= 10000 {
-            info!("💓 Heartbeat - System running");
-            last_heartbeat = now;
-        }
+        // Phase 3: Transmission FSM update (always active)
+        update_transmission_fsm(now_ms);
         
-        // Sleep until next event ONLY if completely idle
-        let has_work = is_transmission_active() || 
-                       consumer.ready() || 
-                       SYSTEM_EVENTS.load(Ordering::Relaxed) != 0;
+        // Phase 4: Debug heartbeat
+        debug_heartbeat(&mut last_heartbeat);
         
-        if !has_work {
+        // Phase 5: Power saving
+        if can_enter_low_power(now_ms) {
             unsafe { riscv::asm::wfi(); }
         }
     }
 }
 
-/// Process a single element from the queue
-fn process_element(element: Element, unit: Duration) {
-    match element {
-        Element::Dit => {
-            debug!("📡 Sending Dit");
-            send_element(unit);
-        }
-        Element::Dah => {
-            debug!("📡 Sending Dah");
-            send_element(unit * 3);
-        }
-        Element::CharSpace => {
-            debug!("⏸️ Character space");
-            delay_ms(unit.as_millis() as u32 * 3);
-        }
-    }
-}
-
-/// Process a single element from the queue with low power (DEPRECATED - use transmission FSM)
-fn process_element_low_power(element: Element, unit: Duration) {
-    match element {
-        Element::Dit => {
-            debug!("📡 Sending Dit");
-            // Use new transmission FSM instead
-            start_element_transmission(element, unit.as_millis() as u32);
-        }
-        Element::Dah => {
-            debug!("📡 Sending Dah");
-            // Use new transmission FSM instead  
-            start_element_transmission(element, unit.as_millis() as u32);
-        }
-        Element::CharSpace => {
-            debug!("⏸️ Character space");
-            // Use new transmission FSM instead
-            start_element_transmission(element, unit.as_millis() as u32);
-        }
-    }
-}
-
-/// Send a keyed element with timing
-fn send_element(duration: Duration) {
-    // Key down
-    KEY_OUTPUT.set_high();
-    STATUS_LED.set_high();
-    SIDETONE_PWM.set_duty(500);
-    
-    // Element duration
-    delay_ms(duration.as_millis() as u32);
-    
-    // Key up
-    KEY_OUTPUT.set_low();
-    STATUS_LED.set_low();
-    SIDETONE_PWM.set_duty(0);
-    
-    // Inter-element space (1 unit)
-    delay_ms(60); // 1 unit at 20 WPM
-}
-
-/// Start non-blocking element transmission
-fn start_element_transmission(element: Element, unit_ms: u32) {
-    let now = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-    
-    match element {
-        Element::Dit => {
-            // Start Dit transmission
-            KEY_OUTPUT.set_high();
-            STATUS_LED.set_high();
-            SIDETONE_PWM.set_duty(500);
-            
-            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
-            TRANSMIT_STATE.store(TransmitState::DitKeyDown as u8, Ordering::Release);
-            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
-        },
-        Element::Dah => {
-            // Start Dah transmission  
-            KEY_OUTPUT.set_high();
-            STATUS_LED.set_high();
-            SIDETONE_PWM.set_duty(500);
-            
-            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms * 3), Ordering::Release);
-            TRANSMIT_STATE.store(TransmitState::DahKeyDown as u8, Ordering::Release);
-            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
-        },
-        Element::CharSpace => {
-            // Start character space (no key output)
-            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms * 3), Ordering::Release);
-            TRANSMIT_STATE.store(TransmitState::CharSpace as u8, Ordering::Release);
-            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
-        }
-    }
-}
-
-/// Update transmission state machine - returns true if transmission active
-fn update_transmission_state(unit_ms: u32) -> bool {
-    let now = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-    let deadline = TRANSMIT_DEADLINE.load(Ordering::Relaxed);
-    
-    if now < deadline {
-        return true; // Still transmitting
-    }
-    
-    // Time expired, advance state
-    let current_state: TransmitState = unsafe {
-        core::mem::transmute(TRANSMIT_STATE.load(Ordering::Relaxed))
-    };
-    
-    match current_state {
-        TransmitState::DitKeyDown => {
-            // End Dit, start inter-element space
-            KEY_OUTPUT.set_low();
-            STATUS_LED.set_low();
-            SIDETONE_PWM.set_duty(0);
-            
-            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
-            TRANSMIT_STATE.store(TransmitState::DitSpace as u8, Ordering::Release);
-            true // Still in transmission phase
-        },
-        TransmitState::DahKeyDown => {
-            // End Dah, start inter-element space
-            KEY_OUTPUT.set_low();
-            STATUS_LED.set_low();
-            SIDETONE_PWM.set_duty(0);
-            
-            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
-            TRANSMIT_STATE.store(TransmitState::DahSpace as u8, Ordering::Release);
-            true // Still in transmission phase
-        },
-        TransmitState::DitSpace | TransmitState::DahSpace | TransmitState::CharSpace => {
-            // Transmission complete
-            TRANSMIT_STATE.store(TransmitState::Idle as u8, Ordering::Release);
-            SYSTEM_STATE.store(SystemState::Idle as u8, Ordering::Release);
-            false // Transmission finished
-        },
-        TransmitState::Idle => {
-            false // Already idle
-        }
-    }
-}
-
-/// Check if transmission FSM is active
-fn is_transmission_active() -> bool {
-    let state: TransmitState = unsafe {
-        core::mem::transmute(TRANSMIT_STATE.load(Ordering::Relaxed))
-    };
-    state != TransmitState::Idle
-}
-
-/// Simple delay implementation using system tick
-fn delay_ms(ms: u32) {
-    let start = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-    while SYSTEM_TICK_MS.load(Ordering::Relaxed).saturating_sub(start) < ms {
-        // RISC-V nop
-        unsafe { riscv::asm::nop(); }
-    }
-}
-
-/// Low-power delay implementation using WFI
-fn delay_ms_low_power(ms: u32) {
-    let target = SYSTEM_TICK_MS.load(Ordering::Relaxed).saturating_add(ms);
-    while SYSTEM_TICK_MS.load(Ordering::Relaxed) < target {
-        // Sleep until next interrupt (SysTick or other)
-        unsafe { riscv::asm::wfi(); }
-    }
-}
-
-/// Initialize CH32V003 hardware
+/// Hardware initialization wrapper
 fn hardware_init() {
-    // 1. Enable peripheral clocks
     enable_peripheral_clocks();
-    
-    // 2. Configure GPIO pins
     configure_gpio_pins();
-    
-    // 3. Configure SysTick timer for 1ms interrupts
     configure_systick();
-    
-    // 4. Configure EXTI for paddle interrupts
     configure_exti_interrupts();
-    
-    // 5. Configure TIM1 for PWM sidetone
     configure_pwm_sidetone();
+    initialize_keyer_fsm();
     
-    info!("🔌 GPIO configured: Dit=PA2, Dah=PA3, Key=PD6, LED=PD7");
-    info!("🎵 PWM sidetone configured (600Hz)");
+    info!("✅ Hardware initialization complete");
 }
 
 /// Enable required peripheral clocks
@@ -787,53 +759,66 @@ fn configure_pwm_sidetone() {
     SIDETONE_PWM.enable();
 }
 
-// ========================================
-// Interrupt Handlers (Stubs)
-// ========================================
-
-/// SysTick interrupt handler - increment system tick counter
-#[no_mangle]
-extern "C" fn SysTick() {
-    let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
-    SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
+#[entry]
+fn main() -> ! {
+    hardware_init();
     
-    // Wake main loop only if actively sending
-    let system_state: SystemState = unsafe {
-        core::mem::transmute(SYSTEM_STATE.load(Ordering::Relaxed))
-    };
-    if system_state == SystemState::Sending {
-        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
-    }
+    info!("🚀 CH32V003 Keyer - Separated FSM Architecture");
+    info!("📊 Memory: TxController={}B, Queue={}B", 
+          core::mem::size_of::<TxController>(),
+          core::mem::size_of::<Queue<Element, 4>>());
     
-    // Periodic FSM update every 10ms for proper squeeze handling
-    if current % 10 == 0 {
-        SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
-    }
+    main_loop();
+    
+    // This should never be reached
+    loop {}
 }
 
-/// EXTI2 interrupt handler - Dit paddle (PA2)
-#[no_mangle] 
+// ========================================
+// Interrupt Handlers
+// ========================================
+
+/// SysTick interrupt handler (new architecture)
+#[no_mangle]
+extern "C" fn SysTick() {
+    // 1ms tick update
+    let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Release);
+    
+    // Power optimization: only wake from WFI when transmission active
+    if TX_CONTROLLER.is_transmitting() {
+        // Transmission FSM needs precise timing, auto-wake from WFI
+    }
+    // Idle time continues WFI for maximum power savings
+}
+
+/// EXTI interrupt handler for paddle edges (new architecture)
+#[no_mangle]
 extern "C" fn EXTI7_0_IRQHandler() {
     unsafe {
         let exti_pr = (EXTI_BASE + EXTI_PR) as *mut u32;
         let pending = core::ptr::read_volatile(exti_pr);
         
-        // Check EXTI2 (PA2 - Dit paddle)
+        // EXTI2 (PA2 - Dit) both edge detection
         if pending & (1 << 2) != 0 {
             DIT_INPUT.update_from_interrupt();
-            // Clear EXTI2 pending bit
             core::ptr::write_volatile(exti_pr, 1 << 2);
-            // Set paddle event
-            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
+            
+            // Immediate notification to main loop
+            PADDLE_CHANGED.store(true, Ordering::Release);
+            let old_events = SYSTEM_EVENTS.load(Ordering::Relaxed);
+            SYSTEM_EVENTS.store(old_events | EVENT_PADDLE, Ordering::Release);
         }
         
-        // Check EXTI3 (PA3 - Dah paddle)
+        // EXTI3 (PA3 - Dah) both edge detection  
         if pending & (1 << 3) != 0 {
             DAH_INPUT.update_from_interrupt();
-            // Clear EXTI3 pending bit
             core::ptr::write_volatile(exti_pr, 1 << 3);
-            // Set paddle event
-            SYSTEM_EVENTS.fetch_or(EVENT_PADDLE, Ordering::Release);
+            
+            // Immediate notification to main loop
+            PADDLE_CHANGED.store(true, Ordering::Release);
+            let old_events = SYSTEM_EVENTS.load(Ordering::Relaxed);
+            SYSTEM_EVENTS.store(old_events | EVENT_PADDLE, Ordering::Release);
         }
     }
 }

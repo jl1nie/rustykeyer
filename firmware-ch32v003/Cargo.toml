@@ -44,3 +44,4 @@ path = "src/main.rs"
 default = ["sidetone"]
 sidetone = []
 debug-uart = []
+debug = ["defmt", "defmt-rtt"]
