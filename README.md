@@ -106,8 +106,8 @@ PD7 - Status LED (Push-pull)
 
 ### 📚 主要ドキュメント
 - **[CH32V003 ベアメタル実装詳細](docs/hardware/CH32V003_BAREMENTAL_GUIDE.md)** - 完全実装ガイド
-- **[ハードウェア仕様](docs/hardware/)** - 回路図・ピン配置
-- **[API リファレンス](docs/api/)** - コアライブラリAPI
+- **[回路図・TLP785設計](docs/hardware/CH32V003_CIRCUIT_DIAGRAM.md)** - フォトカプラー安全接続
+- **[keyer-core API リファレンス](docs/api/keyer-core-api.md)** - コアライブラリ完全仕様
 
 ### 🎯 設計仕様書 (Kiro)
 - [要件仕様](.kiro/specs/keyer-main/requirements.md) - 機能要件・動作仕様

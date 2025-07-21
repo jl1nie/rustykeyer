@@ -14,12 +14,13 @@
   - レジスタ直接制御・割り込み・PWM詳細
   - メモリ配分・性能測定・実機対応手順
 - **[CH32V003 Implementation Guide (English)](hardware/CH32V003_BAREMENTAL_GUIDE_EN.md)**
-- **[ピン配置・回路図](hardware/)** - 実装回路例
+- **[回路図・TLP785設計](hardware/CH32V003_CIRCUIT_DIAGRAM.md)** - フォトカプラー安全接続
+- **[Circuit Diagram with TLP785 (English)](hardware/CH32V003_CIRCUIT_DIAGRAM_EN.md)**
 
 ### 🦀 API仕様
-- **[keyer-core API](api/)** - コアライブラリ仕様
-- **[HAL抽象化](api/)** - ハードウェア抽象レイヤー
-- **[FSM仕様](api/)** - 有限状態機械設計
+- **[keyer-core API リファレンス](api/keyer-core-api.md)** - コアライブラリ完全仕様
+- **[keyer-core API Reference (English)](api/keyer-core-api-en.md)** - Complete library specification
+- **[HAL抽象化詳細](api/keyer-core-api.md#🔌-hardware-abstraction-layer-hal)** - ハードウェア抽象レイヤー
 
 ### 📋 開発記録
 - **[セッション記録](archive/)** - 実装過程の詳細記録
