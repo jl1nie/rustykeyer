@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 //! # Keyer Core
 //! 
@@ -12,6 +12,9 @@ pub mod hal;
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+
+#[cfg(test)]
+mod hal_tests;
 
 pub use types::*;
 pub use fsm::*;

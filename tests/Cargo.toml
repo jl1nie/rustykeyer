@@ -5,7 +5,7 @@ edition = "2021"
 description = "Host-based tests for iambic keyer"
 
 [dependencies]
-# keyer-core = { path = "../keyer-core", features = ["std", "test-utils", "embassy-time"] }
+keyer-core = { path = "../keyer-core", features = ["std", "test-utils", "embassy-time"] }
 rustykeyer-firmware = { path = "../firmware" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test = { workspace = true }

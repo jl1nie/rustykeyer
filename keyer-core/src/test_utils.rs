@@ -1,6 +1,6 @@
 //! Test utilities for keyer core functionality
 
-#[cfg(feature = "test-utils")]
+#[cfg(all(feature = "test-utils", feature = "std", feature = "embassy-time"))]
 pub mod virtual_time {
     //! Virtual time simulation for deterministic testing
     
@@ -39,7 +39,7 @@ pub mod virtual_time {
         /// Get current virtual time
         pub fn now(&self) -> Instant {
             let inner = self.inner.lock().unwrap();
-            Instant::from_millis(inner.current_time as i64)
+            Instant::from_millis(inner.current_time)
         }
         
         /// Advance virtual time by duration
@@ -83,7 +83,7 @@ pub mod virtual_time {
     }
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(all(feature = "test-utils", feature = "embassy-time"))]
 pub mod paddle_simulator {
     //! Paddle input simulation for testing
     
@@ -104,7 +104,7 @@ pub mod paddle_simulator {
     #[derive(Debug, Clone)]
     pub struct PaddlePattern {
         pub events: Vec<PaddleEvent, 64>,
-        pub description: String<64>,
+        pub description: String<32>,
     }
     
     impl PaddlePattern {
@@ -115,7 +115,7 @@ pub mod paddle_simulator {
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dit, pressed: true },
                     PaddleEvent { time: unit, side: PaddleSide::Dit, pressed: false },
                 ]).unwrap(),
-                description: String::from("Dit"),
+                description: String::try_from("Dit").unwrap(),
             }
         }
         
@@ -126,7 +126,7 @@ pub mod paddle_simulator {
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dah, pressed: true },
                     PaddleEvent { time: unit * 3, side: PaddleSide::Dah, pressed: false },
                 ]).unwrap(),
-                description: String::from("Dah"),
+                description: String::try_from("Dah").unwrap(),
             }
         }
         
@@ -139,7 +139,7 @@ pub mod paddle_simulator {
                     PaddleEvent { time: duration, side: PaddleSide::Dit, pressed: false },
                     PaddleEvent { time: duration + Duration::from_millis(10), side: PaddleSide::Dah, pressed: false },
                 ]).unwrap(),
-                description: String::from("Squeeze"),
+                description: String::try_from("Squeeze").unwrap(),
             }
         }
         
@@ -156,7 +156,7 @@ pub mod paddle_simulator {
                     PaddleEvent { time: unit + inter_element, side: PaddleSide::Dah, pressed: true },
                     PaddleEvent { time: unit + inter_element + unit * 3, side: PaddleSide::Dah, pressed: false },
                 ]).unwrap(),
-                description: String::from("Letter A (Dit-Dah)"),
+                description: String::try_from("Letter A (Dit-Dah)").unwrap(),
             }
         }
         
@@ -180,7 +180,7 @@ pub mod paddle_simulator {
             
             Self {
                 events,
-                description: String::from("Sequence"),
+                description: String::try_from("Sequence").unwrap(),
             }
         }
     }
@@ -194,13 +194,14 @@ pub mod paddle_simulator {
     }
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(all(feature = "test-utils", feature = "embassy-time"))]
 pub mod output_capture {
     //! Output capture and analysis for testing
     
     use crate::types::Element;
     use embassy_time::{Duration, Instant};
     use std::collections::VecDeque;
+    use heapless::{Vec, String};
     
     /// Captured keyer output event
     #[derive(Debug, Clone, PartialEq)]
@@ -303,7 +304,7 @@ pub mod output_capture {
         }
         
         /// Convert to morse code string
-        pub fn to_morse_string(&self) -> String<64> {
+        pub fn to_morse_string(&self) -> String<32> {
             let mut result = String::new();
             for event in &self.events {
                 let ch = match event.element {
@@ -365,7 +366,7 @@ pub mod output_capture {
     }
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(all(feature = "test-utils", feature = "embassy-time"))]
 pub mod test_scenarios {
     //! Common test scenarios
     
@@ -383,7 +384,7 @@ pub mod test_scenarios {
                 PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dah, pressed: true },
                 // ... (implement full CQ pattern)
             ]).unwrap(),
-            description: String::from("CQ CQ CQ call"),
+            description: String::try_from("CQ CQ CQ call").unwrap(),
         }
     }
     
@@ -391,7 +392,7 @@ pub mod test_scenarios {
     pub fn contest_pattern(unit: Duration) -> PaddlePattern {
         PaddlePattern {
             events: Vec::new(),
-            description: String::from("Contest rapid input"),
+            description: String::try_from("Contest rapid input").unwrap(),
         }
     }
     

@@ -5,10 +5,10 @@ edition = "2021"
 description = "Core iambic keyer logic library (no_std)"
 
 [features]
-default = ["embassy-time"]
+default = []
 std = []
-test-utils = ["std"]
 embassy-time = ["dep:embassy-time"]
+test-utils = ["std", "embassy-time"]
 
 [dependencies]
 embedded-hal = { workspace = true }

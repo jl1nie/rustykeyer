@@ -80,8 +80,8 @@ pub enum HalError {
 }
 
 #[cfg(feature = "std")]
-impl std::fmt::Display for HalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for HalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             HalError::GpioError => write!(f, "GPIO operation failed"),
             HalError::TimingError => write!(f, "Timing operation failed"),
@@ -300,7 +300,7 @@ impl InterruptConfig for NoOpInterruptController {
     }
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod mock {
     //! Mock implementations for testing
     
