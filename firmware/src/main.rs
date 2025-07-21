@@ -10,6 +10,7 @@ use heapless::spsc::Queue;
 use static_cell::StaticCell;
 
 use keyer_core::*;
+use rustykeyer_firmware::*;
 
 // Static resources
 static PADDLE: PaddleInput = PaddleInput::new();
@@ -63,98 +64,8 @@ async fn init_hardware() -> MockKeyerHal {
     MockKeyerHal::new()
 }
 
-/// Mock hardware implementation for testing
-struct MockKeyerHal {
-    dit_paddle: MockPaddle,
-    dah_paddle: MockPaddle,
-    key_output: MockKeyOutput,
-}
 
-impl MockKeyerHal {
-    fn new() -> Self {
-        defmt::info!("🧪 Using mock hardware (for testing)");
-        Self {
-            dit_paddle: MockPaddle::new(),
-            dah_paddle: MockPaddle::new(), 
-            key_output: MockKeyOutput::new(),
-        }
-    }
-}
-
-/// Mock paddle implementation
-struct MockPaddle {
-    pressed: bool,
-}
-
-impl MockPaddle {
-    fn new() -> Self {
-        Self { pressed: false }
-    }
-}
-
-impl InputPaddle for MockPaddle {
-    type Error = HalError;
-
-    fn is_pressed(&mut self) -> Result<bool, Self::Error> {
-        Ok(self.pressed)
-    }
-
-    fn last_edge_time(&self) -> Option<crate::hal::Instant> {
-        None
-    }
-
-    fn set_debounce_time(&mut self, _time_ms: u32) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn enable_interrupt(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn disable_interrupt(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
-/// Mock key output implementation
-struct MockKeyOutput {
-    state: bool,
-}
-
-impl MockKeyOutput {
-    fn new() -> Self {
-        Self { state: false }
-    }
-}
-
-impl OutputKey for MockKeyOutput {
-    type Error = HalError;
-
-    fn set_state(&mut self, state: bool) -> Result<(), Self::Error> {
-        if state != self.state {
-            defmt::info!("🔑 Key: {}", if state { "DOWN" } else { "UP" });
-            self.state = state;
-        }
-        Ok(())
-    }
-
-    fn get_state(&self) -> Result<bool, Self::Error> {
-        Ok(self.state)
-    }
-}
-
-/// Evaluator task wrapper
-#[embassy_executor::task]
-async fn evaluator_task_wrapper(
-    paddle: &'static PaddleInput,
-    producer: heapless::spsc::Producer<'static, Element, 64>,
-    config: KeyerConfig,
-) {
-    defmt::info!("🧠 Evaluator task started");
-    evaluator_task(paddle, producer, config).await;
-}
-
-/// Sender task for key output
+/// Sender task for key output (local implementation)
 #[embassy_executor::task]
 async fn sender_task(
     mut consumer: heapless::spsc::Consumer<'static, Element, 64>,

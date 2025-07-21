@@ -6,7 +6,8 @@
   "approval": {
     "requirements": true,
     "design": true,
-    "tasks": true
+    "tasks": true,
+    "testing": true
   },
   "status": "implementation_complete",
   "implementation": {

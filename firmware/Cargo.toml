@@ -21,6 +21,10 @@ static_cell = "2.1"
 # CH32V HAL (placeholder - adjust based on actual HAL crate)
 # ch32v0-hal = { version = "0.1", features = ["ch32v003", "rt"] }
 
+[lib]
+name = "rustykeyer_firmware"
+path = "src/lib.rs"
+
 [[bin]]
 name = "keyer"
 path = "src/main.rs"

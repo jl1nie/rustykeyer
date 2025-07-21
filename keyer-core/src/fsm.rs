@@ -1,6 +1,6 @@
 //! Finite State Machine implementation for iambic keyer
 
-use crate::hal::{Duration, Instant};
+use crate::hal::Instant;
 use heapless::spsc::Producer;
 use crate::types::{Element, FSMState, KeyerConfig, KeyerMode};
 use crate::controller::{PaddleInput, SuperKeyerController};

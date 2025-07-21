@@ -5,10 +5,11 @@ edition = "2021"
 description = "Host-based tests for iambic keyer"
 
 [dependencies]
-keyer-core = { path = "../keyer-core", features = ["std", "test-utils"] }
-tokio = { workspace = true }
+# keyer-core = { path = "../keyer-core", features = ["std", "test-utils", "embassy-time"] }
+rustykeyer-firmware = { path = "../firmware" }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test = { workspace = true }
-embassy-time = { workspace = true, features = ["std", "mock-driver"] }
+embassy-time = { workspace = true, features = ["mock-driver"] }
 embedded-hal = { workspace = true }
 embedded-hal-mock = "0.10"
 heapless = { workspace = true }
@@ -22,6 +23,10 @@ rstest = "0.18"
 name = "integration_tests"
 path = "src/main.rs"
 test = false
+
+[lib]
+name = "keyer_tests"
+path = "src/lib.rs"
 
 [[bench]]
 name = "timing_precision"

@@ -90,6 +90,7 @@ pub mod paddle_simulator {
     use crate::types::{Element, PaddleSide};
     use crate::controller::PaddleInput;
     use embassy_time::Duration;
+    use heapless::{Vec, String};
     
     /// Paddle event for simulation
     #[derive(Debug, Clone)]
@@ -102,43 +103,43 @@ pub mod paddle_simulator {
     /// Paddle pattern for simulation
     #[derive(Debug, Clone)]
     pub struct PaddlePattern {
-        pub events: Vec<PaddleEvent>,
-        pub description: String,
+        pub events: Vec<PaddleEvent, 64>,
+        pub description: String<64>,
     }
     
     impl PaddlePattern {
         /// Create a simple Dit pattern
         pub fn dit(unit: Duration) -> Self {
             Self {
-                events: vec![
+                events: Vec::from_slice(&[
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dit, pressed: true },
                     PaddleEvent { time: unit, side: PaddleSide::Dit, pressed: false },
-                ],
-                description: "Dit".to_string(),
+                ]).unwrap(),
+                description: String::from("Dit"),
             }
         }
         
         /// Create a simple Dah pattern
         pub fn dah(unit: Duration) -> Self {
             Self {
-                events: vec![
+                events: Vec::from_slice(&[
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dah, pressed: true },
                     PaddleEvent { time: unit * 3, side: PaddleSide::Dah, pressed: false },
-                ],
-                description: "Dah".to_string(),
+                ]).unwrap(),
+                description: String::from("Dah"),
             }
         }
         
         /// Create a squeeze pattern (both paddles)
         pub fn squeeze(unit: Duration, duration: Duration) -> Self {
             Self {
-                events: vec![
+                events: Vec::from_slice(&[
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dit, pressed: true },
                     PaddleEvent { time: Duration::from_millis(10), side: PaddleSide::Dah, pressed: true },
                     PaddleEvent { time: duration, side: PaddleSide::Dit, pressed: false },
                     PaddleEvent { time: duration + Duration::from_millis(10), side: PaddleSide::Dah, pressed: false },
-                ],
-                description: format!("Squeeze for {:?}", duration),
+                ]).unwrap(),
+                description: String::from("Squeeze"),
             }
         }
         
@@ -146,7 +147,7 @@ pub mod paddle_simulator {
         pub fn letter_a(unit: Duration) -> Self {
             let inter_element = unit;
             Self {
-                events: vec![
+                events: Vec::from_slice(&[
                     // Dit
                     PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dit, pressed: true },
                     PaddleEvent { time: unit, side: PaddleSide::Dit, pressed: false },
@@ -154,32 +155,32 @@ pub mod paddle_simulator {
                     // Dah
                     PaddleEvent { time: unit + inter_element, side: PaddleSide::Dah, pressed: true },
                     PaddleEvent { time: unit + inter_element + unit * 3, side: PaddleSide::Dah, pressed: false },
-                ],
-                description: "Letter A (Dit-Dah)".to_string(),
+                ]).unwrap(),
+                description: String::from("Letter A (Dit-Dah)"),
             }
         }
         
         /// Combine multiple patterns with timing
-        pub fn sequence(patterns: Vec<(PaddlePattern, Duration)>) -> Self {
+        pub fn sequence(patterns: &[(PaddlePattern, Duration)]) -> Self {
             let mut events = Vec::new();
             let mut offset = Duration::from_millis(0);
-            let mut descriptions = Vec::new();
+            let mut descriptions = Vec::<String<32>, 16>::new();
             
             for (pattern, delay) in patterns {
-                for event in pattern.events {
+                for event in &pattern.events {
                     events.push(PaddleEvent {
                         time: offset + event.time,
                         side: event.side,
                         pressed: event.pressed,
-                    });
+                    }).ok();
                 }
-                descriptions.push(pattern.description);
-                offset += delay;
+                descriptions.push(pattern.description.clone()).ok();
+                offset += *delay;
             }
             
             Self {
                 events,
-                description: descriptions.join(" + "),
+                description: String::from("Sequence"),
             }
         }
     }
@@ -263,14 +264,14 @@ pub mod output_capture {
         
         /// Analyze timing accuracy
         pub fn analyze_timing(&self, expected_unit: Duration) -> TimingAnalysis {
-            let mut dit_durations = Vec::new();
-            let mut dah_durations = Vec::new();
-            let mut inter_element_gaps = Vec::new();
+            let mut dit_durations = Vec::<Duration, 32>::new();
+            let mut dah_durations = Vec::<Duration, 32>::new();
+            let mut inter_element_gaps = Vec::<Duration, 32>::new();
             
             for (i, event) in self.events.iter().enumerate() {
                 match event.element {
-                    Element::Dit => dit_durations.push(event.duration),
-                    Element::Dah => dah_durations.push(event.duration),
+                    Element::Dit => { dit_durations.push(event.duration).ok(); },
+                    Element::Dah => { dah_durations.push(event.duration).ok(); },
                     Element::CharSpace => {}
                 }
                 
@@ -280,7 +281,7 @@ pub mod output_capture {
                     let gap = next_event.start_time.duration_since(
                         event.start_time + event.duration
                     );
-                    inter_element_gaps.push(gap);
+                    inter_element_gaps.push(gap).ok();
                 }
             }
             
@@ -293,17 +294,26 @@ pub mod output_capture {
         }
         
         /// Convert to sequence of elements
-        pub fn to_element_sequence(&self) -> Vec<Element> {
-            self.events.iter().map(|e| e.element).collect()
+        pub fn to_element_sequence(&self) -> Vec<Element, 32> {
+            let mut result = Vec::new();
+            for event in &self.events {
+                result.push(event.element).ok();
+            }
+            result
         }
         
         /// Convert to morse code string
-        pub fn to_morse_string(&self) -> String {
-            self.events.iter().map(|e| match e.element {
-                Element::Dit => ".",
-                Element::Dah => "-",
-                Element::CharSpace => " ",
-            }).collect()
+        pub fn to_morse_string(&self) -> String<64> {
+            let mut result = String::new();
+            for event in &self.events {
+                let ch = match event.element {
+                    Element::Dit => ".",
+                    Element::Dah => "-",
+                    Element::CharSpace => " ",
+                };
+                result.push_str(ch).ok();
+            }
+            result
         }
     }
     
@@ -311,9 +321,9 @@ pub mod output_capture {
     #[derive(Debug)]
     pub struct TimingAnalysis {
         pub expected_unit: Duration,
-        pub dit_durations: Vec<Duration>,
-        pub dah_durations: Vec<Duration>,
-        pub inter_element_gaps: Vec<Duration>,
+        pub dit_durations: Vec<Duration, 32>,
+        pub dah_durations: Vec<Duration, 32>,
+        pub inter_element_gaps: Vec<Duration, 32>,
     }
     
     impl TimingAnalysis {
@@ -362,37 +372,36 @@ pub mod test_scenarios {
     use super::paddle_simulator::{PaddlePattern, PaddleEvent};
     use crate::types::{Element, KeyerMode, PaddleSide};
     use embassy_time::Duration;
+    use heapless::{Vec, String};
     
     /// Generate test scenario for CQ calling
     pub fn cq_call_pattern(unit: Duration) -> PaddlePattern {
         // CQ CQ CQ = (-.-. --.- / -.-. --.- / -.-. --.-) 
         PaddlePattern {
-            events: vec![
+            events: Vec::from_slice(&[
                 // C: -.-. 
                 PaddleEvent { time: Duration::from_millis(0), side: PaddleSide::Dah, pressed: true },
                 // ... (implement full CQ pattern)
-            ],
-            description: "CQ CQ CQ call".to_string(),
+            ]).unwrap(),
+            description: String::from("CQ CQ CQ call"),
         }
     }
     
     /// Contest-style rapid input
     pub fn contest_pattern(unit: Duration) -> PaddlePattern {
         PaddlePattern {
-            events: vec![
-                // Rapid squeeze alternation
-            ],
-            description: "Contest rapid input".to_string(),
+            events: Vec::new(),
+            description: String::from("Contest rapid input"),
         }
     }
     
     /// Test all three keyer modes with same input
-    pub fn mode_comparison_scenarios() -> Vec<(KeyerMode, PaddlePattern)> {
+    pub fn mode_comparison_scenarios() -> Vec<(KeyerMode, PaddlePattern), 8> {
         let unit = Duration::from_millis(60);
-        vec![
+        Vec::from_slice(&[
             (KeyerMode::ModeA, PaddlePattern::squeeze(unit, unit * 5)),
             (KeyerMode::ModeB, PaddlePattern::squeeze(unit, unit * 5)),
             (KeyerMode::SuperKeyer, PaddlePattern::squeeze(unit, unit * 5)),
-        ]
+        ]).unwrap()
     }
 }
