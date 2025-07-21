@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+// Logging support
 #[cfg(feature = "defmt")]
 use defmt::{debug, info, warn};
 #[cfg(feature = "defmt")]
@@ -23,55 +24,100 @@ macro_rules! warn {
     ($($arg:tt)*) => {};
 }
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::{Channel, Sender, Receiver};
-
-// Mock CH32V003 HAL for Embassy footprint testing
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use keyer_core::{*, evaluator_task};
-use static_cell::StaticCell;
+// Core imports
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use riscv_rt::entry;
+use keyer_core::{
+    KeyerFSM, PaddleInput, KeyerConfig, KeyerMode, Element,
+    hal::{Duration, Instant, InputPaddle, OutputKey, HalError}
+};
 use heapless::spsc::Queue;
 
-// Static resources
+// Critical section implementation for RISC-V
+struct RiscvCriticalSection;
+critical_section::set_impl!(RiscvCriticalSection);
+
+unsafe impl critical_section::Impl for RiscvCriticalSection {
+    unsafe fn acquire() -> critical_section::RawRestoreState {
+        let mstatus = riscv::register::mstatus::read();
+        riscv::register::mstatus::clear_mie();
+        mstatus.mie() as u8
+    }
+
+    unsafe fn release(was_enabled: critical_section::RawRestoreState) {
+        if was_enabled != 0 {
+            riscv::register::mstatus::set_mie();
+        }
+    }
+}
+
+// ========================================
+// Hardware Abstraction Layer
+// ========================================
+
+/// System tick counter for timing (updated by SysTick interrupt)
+static SYSTEM_TICK_MS: AtomicU32 = AtomicU32::new(0);
+
+/// Global paddle state (updated by EXTI interrupts)
 static PADDLE: PaddleInput = PaddleInput::new();
-static ELEMENT_QUEUE: StaticCell<Queue<Element, 8>> = StaticCell::new();
-static SIDETONE_CHANNEL: Channel<CriticalSectionRawMutex, SidetoneCommand, 8> = Channel::new();
 
-// Mock GPIO types for Embassy footprint testing
-struct MockInput {
-    state: AtomicBool,
+/// Element queue for FSM communication
+static mut ELEMENT_QUEUE: Queue<Element, 4> = Queue::new();
+
+/// Get current system time as Instant
+fn get_current_instant() -> Instant {
+    let ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    Instant::from_millis(ms as i64)
 }
 
-struct MockOutput {
+/// CH32V003 GPIO Input implementation
+struct Ch32v003Input {
+    /// GPIO pin state (mock for now - will be real GPIO registers)
     state: AtomicBool,
+    last_edge: AtomicU32,
 }
 
-struct MockPwm;
-
-impl MockInput {
-    fn new() -> Self {
-        Self { state: AtomicBool::new(false) }
+impl Ch32v003Input {
+    const fn new() -> Self {
+        Self {
+            state: AtomicBool::new(false),
+            last_edge: AtomicU32::new(0),
+        }
     }
     
     fn is_low(&self) -> bool {
         !self.state.load(Ordering::Relaxed)
     }
+    
+    /// Called from EXTI interrupt handler
+    fn update_from_interrupt(&self, pressed: bool) {
+        self.state.store(pressed, Ordering::Relaxed);
+        let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+        self.last_edge.store(now_ms, Ordering::Relaxed);
+    }
 }
 
-impl MockOutput {
-    fn new() -> Self {
-        Self { state: AtomicBool::new(false) }
+/// CH32V003 GPIO Output implementation  
+struct Ch32v003Output {
+    /// GPIO pin state (mock for now - will be real GPIO registers)
+    state: AtomicBool,
+}
+
+impl Ch32v003Output {
+    const fn new() -> Self {
+        Self {
+            state: AtomicBool::new(false),
+        }
     }
     
     fn set_high(&self) {
         self.state.store(true, Ordering::Relaxed);
+        // TODO: Write to actual GPIO register
     }
     
     fn set_low(&self) {
         self.state.store(false, Ordering::Relaxed);
+        // TODO: Write to actual GPIO register
     }
     
     fn is_set_high(&self) -> bool {
@@ -79,271 +125,260 @@ impl MockOutput {
     }
 }
 
-impl MockPwm {
-    fn new() -> Self { Self }
-    fn set_duty(&mut self, _duty: u16) {}
-    fn enable(&mut self) {}
-    fn get_max_duty(&self) -> u16 { 1000 }
-    fn set_frequency(&mut self, _freq: u32) {}
+/// CH32V003 PWM for sidetone
+struct Ch32v003Pwm {
+    enabled: AtomicBool,
+    duty: AtomicU32,
+    frequency: AtomicU32,
 }
 
-/// CH32V003 Hardware implementation (Mock for footprint testing)
-struct Ch32v003Hal {
-    dit_input: MockInput,
-    dah_input: MockInput,
-    key_output: MockOutput,
-    status_led: MockOutput,
-    sidetone_sender: Sender<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
-}
-
-impl Ch32v003Hal {
-    fn new(
-        dit_input: MockInput,
-        dah_input: MockInput,
-        key_output: MockOutput,
-        status_led: MockOutput,
-        sidetone_sender: Sender<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
-    ) -> Self {
+impl Ch32v003Pwm {
+    const fn new() -> Self {
         Self {
-            dit_input,
-            dah_input,
-            key_output,
-            status_led,
-            sidetone_sender,
+            enabled: AtomicBool::new(false),
+            duty: AtomicU32::new(0),
+            frequency: AtomicU32::new(600), // Default 600Hz
         }
     }
+    
+    fn set_duty(&self, duty: u16) {
+        self.duty.store(duty as u32, Ordering::Relaxed);
+        // TODO: Write to TIM1 duty register
+    }
+    
+    fn enable(&self) {
+        self.enabled.store(true, Ordering::Relaxed);
+        // TODO: Enable TIM1 PWM output
+    }
+    
+    fn disable(&self) {
+        self.enabled.store(false, Ordering::Relaxed);
+        // TODO: Disable TIM1 PWM output  
+    }
+    
+    fn set_frequency(&self, freq: u32) {
+        self.frequency.store(freq, Ordering::Relaxed);
+        // TODO: Update TIM1 prescaler/period
+    }
 }
 
-impl InputPaddle for Ch32v003Hal {
-    type Error = HalError;
+// ========================================
+// Hardware Instances
+// ========================================
 
+static DIT_INPUT: Ch32v003Input = Ch32v003Input::new();
+static DAH_INPUT: Ch32v003Input = Ch32v003Input::new();
+static KEY_OUTPUT: Ch32v003Output = Ch32v003Output::new();
+static STATUS_LED: Ch32v003Output = Ch32v003Output::new();
+static SIDETONE_PWM: Ch32v003Pwm = Ch32v003Pwm::new();
+
+/// Combined HAL implementation for keyer-core integration
+struct Ch32v003KeyerHal;
+
+impl InputPaddle for Ch32v003KeyerHal {
+    type Error = HalError;
+    
     fn is_pressed(&mut self) -> Result<bool, Self::Error> {
-        // Mock implementation - Dit and Dah are active low
-        Ok(self.dit_input.is_low() || self.dah_input.is_low())
+        // Check both dit and dah inputs (active low)
+        Ok(!DIT_INPUT.state.load(Ordering::Relaxed) || !DAH_INPUT.state.load(Ordering::Relaxed))
     }
-
-    fn last_edge_time(&self) -> Option<crate::hal::Instant> {
-        // Edge time tracking implemented via EXTI interrupts
-        None
+    
+    fn last_edge_time(&self) -> Option<Instant> {
+        let dit_time = DIT_INPUT.last_edge.load(Ordering::Relaxed);
+        let dah_time = DAH_INPUT.last_edge.load(Ordering::Relaxed);
+        let latest = dit_time.max(dah_time);
+        
+        if latest > 0 {
+            Some(Instant::from_millis(latest as i64))
+        } else {
+            None
+        }
     }
-
+    
     fn set_debounce_time(&mut self, _time_ms: u32) -> Result<(), Self::Error> {
-        // Debounce handled in software
+        // Debounce handled in interrupt handlers
         Ok(())
     }
-
+    
     fn enable_interrupt(&mut self) -> Result<(), Self::Error> {
-        // EXTI interrupts enabled in main
+        // EXTI configuration will be done in hardware_init()
         Ok(())
     }
-
+    
     fn disable_interrupt(&mut self) -> Result<(), Self::Error> {
-        // EXTI interrupts managed in main
+        // EXTI configuration will be done in hardware_init()
         Ok(())
     }
 }
 
-impl OutputKey for Ch32v003Hal {
+impl OutputKey for Ch32v003KeyerHal {
     type Error = HalError;
-
+    
     fn set_state(&mut self, state: bool) -> Result<(), Self::Error> {
         if state {
-            self.key_output.set_high();
-            self.status_led.set_high();
-            // Send sidetone on command
-            if let Err(_) = self.sidetone_sender.try_send(SidetoneCommand::On) {
-                #[cfg(feature = "defmt")]
-            warn!("Sidetone channel full");
-            }
+            KEY_OUTPUT.set_high();
+            STATUS_LED.set_high();
+            // Enable sidetone
+            SIDETONE_PWM.set_duty(500); // 50% duty cycle
         } else {
-            self.key_output.set_low();
-            self.status_led.set_low();
-            // Send sidetone off command
-            if let Err(_) = self.sidetone_sender.try_send(SidetoneCommand::Off) {
-                #[cfg(feature = "defmt")]
-            warn!("Sidetone channel full");
-            }
+            KEY_OUTPUT.set_low();
+            STATUS_LED.set_low(); 
+            // Disable sidetone
+            SIDETONE_PWM.set_duty(0);
         }
         Ok(())
     }
-
+    
     fn get_state(&self) -> Result<bool, Self::Error> {
-        Ok(self.key_output.is_set_high())
+        Ok(KEY_OUTPUT.is_set_high())
     }
 }
 
-/// Sidetone control commands
-#[derive(Debug, Copy, Clone)]
-enum SidetoneCommand {
-    On,
-    Off,
-    SetFrequency(u16),
-}
+// ========================================
+// Main Application
+// ========================================
 
-/// Main firmware entry point
-#[embassy_executor::main]
-async fn main(spawner: Spawner) -> ! {
-    #[cfg(feature = "defmt")]
-    info!("🔧 Rusty Keyer CH32V003 Starting...");
-
-    // Mock CH32V003 initialization for Embassy footprint testing
-    #[cfg(feature = "defmt")]
-    info!("⚡ CH32V003 Mock initialized");
-
-    // Mock GPIO configuration
-    let dit_input = MockInput::new();
-    let dah_input = MockInput::new();
-    let key_output = MockOutput::new();
-    let status_led = MockOutput::new();
-
-    #[cfg(feature = "defmt")]
-    info!("🔌 Mock GPIO configured: Dit=PA2, Dah=PA3, Key=PD6, LED=PD7");
-
-    // Mock PWM for sidetone
-    let pwm = MockPwm::new();
-
-    #[cfg(feature = "defmt")]
-    info!("🎵 Mock PWM configured for sidetone");
-
+#[entry]
+fn main() -> ! {
+    info!("🔧 Rusty Keyer CH32V003 Starting (Bare Metal)...");
+    
+    // Initialize hardware
+    hardware_init();
+    
+    info!("⚡ CH32V003 Hardware initialized");
+    
     // Initialize keyer configuration
     let keyer_config = KeyerConfig {
         mode: KeyerMode::SuperKeyer,
         char_space_enabled: true,
         unit: Duration::from_millis(60), // 20 WPM
         debounce_ms: 5,
-        queue_size: 8,
+        queue_size: 4, // Reduced for CH32V003
     };
-
-    #[cfg(feature = "defmt")]
+    
     info!("⚙️ Keyer config: {:?} WPM, Mode: {:?}", 
           keyer_config.wpm(), keyer_config.mode);
-
-    // Initialize element queue
-    let queue = ELEMENT_QUEUE.init(Queue::new());
-    let (producer, consumer) = queue.split();
-
-    // Get sidetone channel endpoints
-    let sidetone_sender = SIDETONE_CHANNEL.sender();
-    let sidetone_receiver = SIDETONE_CHANNEL.receiver();
-
-    // Create HAL instance
-    let hal = Ch32v003Hal::new(
-        dit_input,
-        dah_input, 
-        key_output,
-        status_led,
-        sidetone_sender,
-    );
-
-    #[cfg(feature = "defmt")]
-    info!("🚀 Spawning keyer tasks...");
-
-    // Spawn keyer tasks
-    spawner.spawn(paddle_monitor_task()).unwrap();
-    spawner.spawn(evaluator_task_ch32(&PADDLE, producer, keyer_config)).unwrap();
-    spawner.spawn(sender_task_ch32(consumer, keyer_config.unit)).unwrap();
-    spawner.spawn(sidetone_task(pwm, sidetone_receiver)).unwrap();
-
-    #[cfg(feature = "defmt")]
-    info!("✨ Keyer firmware ready!");
-
-    // Main supervision loop
-    loop {
-        Timer::after(Duration::from_secs(10)).await;
-        #[cfg(feature = "defmt")]
-        info!("💓 Heartbeat - System running");
-    }
-}
-
-/// Paddle monitoring task using EXTI interrupts
-#[embassy_executor::task]
-async fn paddle_monitor_task() {
-    info!("🎮 Paddle monitor task started");
+    
+    // Initialize FSM and queue
+    let mut fsm = KeyerFSM::new(keyer_config);
+    let (mut producer, mut consumer) = unsafe { ELEMENT_QUEUE.split() };
+    
+    info!("🚀 Keyer system ready!");
+    
+    // Main application loop
+    let mut last_heartbeat = get_current_instant();
     
     loop {
-        // Wait for EXTI interrupt (simulated with timer for now)
-        Timer::after(Duration::from_millis(1)).await;
+        // Update FSM with paddle input (暫定的にmock実装)
+        // TODO: PADDLE状態をGPIOから更新する実装が必要
+        // fsm.update(&PADDLE, &mut producer);
         
-        // Update paddle state in atomic structure
-        // This will be implemented with actual EXTI handlers
-    }
-}
-
-/// Evaluator task wrapper for CH32V003
-#[embassy_executor::task]
-async fn evaluator_task_ch32(
-    paddle: &'static PaddleInput,
-    producer: heapless::spsc::Producer<'static, Element, 8>,
-    config: KeyerConfig,
-) {
-    info!("🧠 Evaluator task started");
-    evaluator_task::<8>(paddle, producer, config).await;
-}
-
-/// Sender task for CH32V003
-#[embassy_executor::task]
-async fn sender_task_ch32(
-    mut consumer: heapless::spsc::Consumer<'static, Element, 8>,
-    unit: Duration,
-) {
-    info!("📤 Sender task started");
-
-    loop {
+        // Process output queue
         if let Some(element) = consumer.dequeue() {
-            let (on_time, element_name) = match element {
-                Element::Dit => (unit, "Dit"),
-                Element::Dah => (unit * 3, "Dah"),
-                Element::CharSpace => (Duration::from_millis(0), "Space"),
-            };
+            process_element(element, keyer_config.unit);
+        }
+        
+        // Heartbeat every 10 seconds
+        let now = get_current_instant();
+        if now.duration_since(last_heartbeat).as_millis() >= 10000 {
+            info!("💓 Heartbeat - System running");
+            last_heartbeat = now;
+        }
+        
+        // Brief CPU pause (RISC-V version)
+        unsafe { riscv::asm::wfi(); }
+    }
+}
 
-            if element.is_keyed() {
-                debug!("📡 Sending {}", element_name);
-                
-                // Key timing handled by HAL
-                Timer::after(on_time).await;
-                Timer::after(unit).await; // Inter-element space
-            } else {
-                // Character space - just wait
-                debug!("⏸️ Character space");
-                Timer::after(unit * 3).await;
-            }
-        } else {
-            // No elements in queue, brief pause
-            Timer::after(unit / 8).await;
+/// Process a single element from the queue
+fn process_element(element: Element, unit: Duration) {
+    match element {
+        Element::Dit => {
+            debug!("📡 Sending Dit");
+            send_element(unit);
+        }
+        Element::Dah => {
+            debug!("📡 Sending Dah");
+            send_element(unit * 3);
+        }
+        Element::CharSpace => {
+            debug!("⏸️ Character space");
+            delay_ms(unit.as_millis() as u32 * 3);
         }
     }
 }
 
-/// Sidetone generation task (Mock implementation)
-#[embassy_executor::task]
-async fn sidetone_task(
-    mut pwm: MockPwm,
-    receiver: Receiver<'static, CriticalSectionRawMutex, SidetoneCommand, 8>,
-) {
-    info!("🔊 Mock Sidetone task started (600Hz default)");
+/// Send a keyed element with timing
+fn send_element(duration: Duration) {
+    // Key down
+    KEY_OUTPUT.set_high();
+    STATUS_LED.set_high();
+    SIDETONE_PWM.set_duty(500);
     
-    // Mock PWM initialization
-    pwm.set_duty(0);
-    pwm.enable();
+    // Element duration
+    delay_ms(duration.as_millis() as u32);
+    
+    // Key up
+    KEY_OUTPUT.set_low();
+    STATUS_LED.set_low();
+    SIDETONE_PWM.set_duty(0);
+    
+    // Inter-element space (1 unit)
+    delay_ms(60); // 1 unit at 20 WPM
+}
 
-    loop {
-        match receiver.receive().await {
-            SidetoneCommand::On => {
-                // Mock PWM on
-                let max_duty = pwm.get_max_duty();
-                pwm.set_duty(max_duty / 2);
-                debug!("🔊 Mock Sidetone ON");
-            }
-            SidetoneCommand::Off => {
-                // Mock PWM off
-                pwm.set_duty(0);
-                debug!("🔇 Mock Sidetone OFF");
-            }
-            SidetoneCommand::SetFrequency(freq) => {
-                // Mock frequency change
-                pwm.set_frequency(freq as u32);
-                info!("🎵 Mock Sidetone frequency set to {}Hz", freq);
-            }
-        }
+/// Simple delay implementation using system tick
+fn delay_ms(ms: u32) {
+    let start = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    while SYSTEM_TICK_MS.load(Ordering::Relaxed).saturating_sub(start) < ms {
+        // RISC-V nop
+        unsafe { riscv::asm::nop(); }
     }
+}
+
+/// Initialize CH32V003 hardware
+fn hardware_init() {
+    // TODO: Real hardware initialization
+    // - Configure system clock
+    // - Initialize GPIO pins
+    // - Configure SysTick timer
+    // - Configure TIM1 for PWM sidetone
+    // - Configure EXTI for paddle interrupts
+    
+    // Enable SysTick for 1ms interrupts
+    // systick_init();
+    
+    // Configure PWM sidetone at 600Hz
+    SIDETONE_PWM.set_frequency(600);
+    SIDETONE_PWM.enable();
+    
+    info!("🔌 GPIO configured: Dit=PA2, Dah=PA3, Key=PD6, LED=PD7");
+    info!("🎵 PWM sidetone configured (600Hz)");
+}
+
+// ========================================
+// Interrupt Handlers (Stubs)
+// ========================================
+
+/// SysTick interrupt handler - increment system tick counter
+#[no_mangle]
+extern "C" fn SysTick() {
+    let current = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
+}
+
+/// EXTI0 interrupt handler - Dit paddle
+#[no_mangle] 
+extern "C" fn EXTI0() {
+    let pressed = true; // TODO: Read actual GPIO state
+    DIT_INPUT.update_from_interrupt(pressed);
+    // TODO: Update PADDLE state for dit side
+}
+
+/// EXTI1 interrupt handler - Dah paddle  
+#[no_mangle]
+extern "C" fn EXTI1() {
+    let pressed = true; // TODO: Read actual GPIO state
+    DAH_INPUT.update_from_interrupt(pressed);
+    // TODO: Update PADDLE state for dah side
 }

@@ -5,17 +5,14 @@ edition = "2021"
 description = "CH32V003 iambic keyer firmware"
 
 [dependencies]
-keyer-core = { path = "../keyer-core", features = ["embassy-time"] }
+keyer-core = { path = "../keyer-core" }  # embassy-time feature削除
+# CH32V003 HAL (future: real HAL implementation)
 # ch32-hal = { git = "https://github.com/ch32-rs/ch32-hal", features = ["ch32v003"] }
-# Mock implementation for testing
-embassy-executor = { version = "0.6", features = ["arch-riscv32", "executor-thread", "task-arena-size-1024"] }
-embassy-time = { version = "0.3" }
-embassy-sync = "0.6"
 riscv-rt = "0.12"
 embedded-hal = "1.0"
-embedded-hal-async = "1.0"
-static_cell = "2.1"
-heapless = "0.8"
+heapless = { version = "0.8", default-features = false }
+riscv = "0.10"
+critical-section = { version = "1.1", features = ["restore-state-u8"] }
 
 # Logging and debugging (minimal for RISC-V)
 defmt = { version = "0.3", optional = true }
