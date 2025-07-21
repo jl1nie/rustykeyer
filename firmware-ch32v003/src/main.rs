@@ -25,7 +25,7 @@ macro_rules! warn {
 }
 
 // Core imports
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use riscv_rt::entry;
 use keyer_core::{
     KeyerFSM, PaddleInput, PaddleSide, KeyerConfig, KeyerMode, Element,
@@ -115,11 +115,31 @@ const EVENT_PADDLE: u32 = 0x01;      // Paddle state changed
 const EVENT_TIMER: u32 = 0x02;       // Timer event
 const EVENT_QUEUE: u32 = 0x04;       // Queue needs processing
 
+/// Transmission state machine for non-blocking element sending
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum TransmitState {
+    Idle = 0,        // Ready for next element
+    DitKeyDown = 1,  // Dit transmission active
+    DitSpace = 2,    // Dit inter-element space
+    DahKeyDown = 3,  // Dah transmission active  
+    DahSpace = 4,    // Dah inter-element space
+    CharSpace = 5,   // Character space pause
+}
+
 /// System operational state
-static SYSTEM_STATE: AtomicU32 = AtomicU32::new(0);
-const STATE_IDLE: u32 = 0;           // Idle, waiting for events
-const STATE_ACTIVE: u32 = 1;         // Processing paddle input
-const STATE_SENDING: u32 = 2;        // Sending element
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum SystemState {
+    Idle = 0,     // Waiting for events
+    Active = 1,   // Processing paddle input
+    Sending = 2,  // Element transmission in progress
+}
+
+/// Transmission state and timing
+static TRANSMIT_STATE: AtomicU8 = AtomicU8::new(TransmitState::Idle as u8);
+static TRANSMIT_DEADLINE: AtomicU32 = AtomicU32::new(0);
+static SYSTEM_STATE: AtomicU8 = AtomicU8::new(SystemState::Idle as u8);
 
 /// Paddle state is managed locally in main loop for simplicity
 
@@ -372,12 +392,13 @@ fn main() -> ! {
     
     info!("🚀 Keyer system ready!");
     
-    // Main application loop - Event Driven Architecture
+    // Main application loop - Event Driven Architecture with Non-blocking Transmission
     let mut last_heartbeat = get_current_instant();
     let mut last_fsm_update = get_current_instant();
+    let unit_ms = keyer_config.unit.as_millis() as u32;
     
     loop {
-        // Check for events
+        // Phase 1: Handle events and FSM updates
         let events = SYSTEM_EVENTS.load(Ordering::Acquire);
         
         if events != 0 {
@@ -401,28 +422,21 @@ fn main() -> ! {
                     current_paddle.update(PaddleSide::Dit, dit_pressed, now_ms);
                     current_paddle.update(PaddleSide::Dah, dah_pressed, now_ms);
                     
-                    // Update FSM
+                    // Update keyer-core FSM (generates Elements)
                     fsm.update(&current_paddle, &mut producer);
-                    
-                    // Check if queue has elements after FSM update
-                    if consumer.ready() {
-                        SYSTEM_EVENTS.fetch_or(EVENT_QUEUE, Ordering::Release);
-                    }
                 });
                 
                 last_fsm_update = get_current_instant();
             }
         }
         
-        // Process output queue with low power
-        if consumer.ready() {
+        // Phase 2: Update transmission state machine
+        let transmission_active = update_transmission_state(unit_ms);
+        
+        // Phase 3: Start new element if transmission is idle
+        if !transmission_active {
             if let Some(element) = consumer.dequeue() {
-                process_element_low_power(element, keyer_config.unit);
-                
-                // Check for more elements
-                if consumer.ready() {
-                    SYSTEM_EVENTS.fetch_or(EVENT_QUEUE, Ordering::Release);
-                }
+                start_element_transmission(element, unit_ms);
             }
         }
         
@@ -433,8 +447,14 @@ fn main() -> ! {
             last_heartbeat = now;
         }
         
-        // Sleep until next event
-        unsafe { riscv::asm::wfi(); }
+        // Sleep until next event ONLY if completely idle
+        let has_work = is_transmission_active() || 
+                       consumer.ready() || 
+                       SYSTEM_EVENTS.load(Ordering::Relaxed) != 0;
+        
+        if !has_work {
+            unsafe { riscv::asm::wfi(); }
+        }
     }
 }
 
@@ -456,22 +476,23 @@ fn process_element(element: Element, unit: Duration) {
     }
 }
 
-/// Process a single element from the queue with low power
+/// Process a single element from the queue with low power (DEPRECATED - use transmission FSM)
 fn process_element_low_power(element: Element, unit: Duration) {
     match element {
         Element::Dit => {
             debug!("📡 Sending Dit");
-            send_element_low_power(unit, unit);
+            // Use new transmission FSM instead
+            start_element_transmission(element, unit.as_millis() as u32);
         }
         Element::Dah => {
             debug!("📡 Sending Dah");
-            send_element_low_power(unit * 3, unit);
+            // Use new transmission FSM instead  
+            start_element_transmission(element, unit.as_millis() as u32);
         }
         Element::CharSpace => {
             debug!("⏸️ Character space");
-            SYSTEM_STATE.store(STATE_SENDING, Ordering::Release);
-            delay_ms_low_power(unit.as_millis() as u32 * 3);
-            SYSTEM_STATE.store(STATE_IDLE, Ordering::Release);
+            // Use new transmission FSM instead
+            start_element_transmission(element, unit.as_millis() as u32);
         }
     }
 }
@@ -495,29 +516,93 @@ fn send_element(duration: Duration) {
     delay_ms(60); // 1 unit at 20 WPM
 }
 
-/// Send a keyed element with low-power timing
-fn send_element_low_power(duration: Duration, unit: Duration) {
-    // Set sending state
-    SYSTEM_STATE.store(STATE_SENDING, Ordering::Release);
+/// Start non-blocking element transmission
+fn start_element_transmission(element: Element, unit_ms: u32) {
+    let now = SYSTEM_TICK_MS.load(Ordering::Relaxed);
     
-    // Key down
-    KEY_OUTPUT.set_high();
-    STATUS_LED.set_high();
-    SIDETONE_PWM.set_duty(500);
+    match element {
+        Element::Dit => {
+            // Start Dit transmission
+            KEY_OUTPUT.set_high();
+            STATUS_LED.set_high();
+            SIDETONE_PWM.set_duty(500);
+            
+            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
+            TRANSMIT_STATE.store(TransmitState::DitKeyDown as u8, Ordering::Release);
+            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
+        },
+        Element::Dah => {
+            // Start Dah transmission  
+            KEY_OUTPUT.set_high();
+            STATUS_LED.set_high();
+            SIDETONE_PWM.set_duty(500);
+            
+            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms * 3), Ordering::Release);
+            TRANSMIT_STATE.store(TransmitState::DahKeyDown as u8, Ordering::Release);
+            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
+        },
+        Element::CharSpace => {
+            // Start character space (no key output)
+            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms * 3), Ordering::Release);
+            TRANSMIT_STATE.store(TransmitState::CharSpace as u8, Ordering::Release);
+            SYSTEM_STATE.store(SystemState::Sending as u8, Ordering::Release);
+        }
+    }
+}
+
+/// Update transmission state machine - returns true if transmission active
+fn update_transmission_state(unit_ms: u32) -> bool {
+    let now = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+    let deadline = TRANSMIT_DEADLINE.load(Ordering::Relaxed);
     
-    // Element duration (low power wait)
-    delay_ms_low_power(duration.as_millis() as u32);
+    if now < deadline {
+        return true; // Still transmitting
+    }
     
-    // Key up
-    KEY_OUTPUT.set_low();
-    STATUS_LED.set_low();
-    SIDETONE_PWM.set_duty(0);
+    // Time expired, advance state
+    let current_state: TransmitState = unsafe {
+        core::mem::transmute(TRANSMIT_STATE.load(Ordering::Relaxed))
+    };
     
-    // Inter-element space (1 unit) with low power wait
-    delay_ms_low_power(unit.as_millis() as u32);
-    
-    // Clear sending state
-    SYSTEM_STATE.store(STATE_IDLE, Ordering::Release);
+    match current_state {
+        TransmitState::DitKeyDown => {
+            // End Dit, start inter-element space
+            KEY_OUTPUT.set_low();
+            STATUS_LED.set_low();
+            SIDETONE_PWM.set_duty(0);
+            
+            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
+            TRANSMIT_STATE.store(TransmitState::DitSpace as u8, Ordering::Release);
+            true // Still in transmission phase
+        },
+        TransmitState::DahKeyDown => {
+            // End Dah, start inter-element space
+            KEY_OUTPUT.set_low();
+            STATUS_LED.set_low();
+            SIDETONE_PWM.set_duty(0);
+            
+            TRANSMIT_DEADLINE.store(now.saturating_add(unit_ms), Ordering::Release);
+            TRANSMIT_STATE.store(TransmitState::DahSpace as u8, Ordering::Release);
+            true // Still in transmission phase
+        },
+        TransmitState::DitSpace | TransmitState::DahSpace | TransmitState::CharSpace => {
+            // Transmission complete
+            TRANSMIT_STATE.store(TransmitState::Idle as u8, Ordering::Release);
+            SYSTEM_STATE.store(SystemState::Idle as u8, Ordering::Release);
+            false // Transmission finished
+        },
+        TransmitState::Idle => {
+            false // Already idle
+        }
+    }
+}
+
+/// Check if transmission FSM is active
+fn is_transmission_active() -> bool {
+    let state: TransmitState = unsafe {
+        core::mem::transmute(TRANSMIT_STATE.load(Ordering::Relaxed))
+    };
+    state != TransmitState::Idle
 }
 
 /// Simple delay implementation using system tick
@@ -707,8 +792,10 @@ extern "C" fn SysTick() {
     SYSTEM_TICK_MS.store(current.wrapping_add(1), Ordering::Relaxed);
     
     // Wake main loop only if actively sending
-    let state = SYSTEM_STATE.load(Ordering::Relaxed);
-    if state == STATE_SENDING {
+    let system_state: SystemState = unsafe {
+        core::mem::transmute(SYSTEM_STATE.load(Ordering::Relaxed))
+    };
+    if system_state == SystemState::Sending {
         SYSTEM_EVENTS.fetch_or(EVENT_TIMER, Ordering::Release);
     }
     
