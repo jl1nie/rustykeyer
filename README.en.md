@@ -187,7 +187,7 @@ PD7 - Status LED (Push-pull)
 - 🟢 **Complete Test Success** - 21/21 HAL abstraction & squeeze verification
 - 🟢 **Production-Level Achievement** - TLP785 isolation, 80% power efficiency improvement, professional squeeze support
 
-**Performance Results**: Flash 1,070B (93% saved) / RAM 2KB fully utilized / 1ms precision / 5000V isolation
+**Performance Results**: Flash 1,070B (93% saved) / RAM 2KB fully utilized / 1ms precision / TLP785 isolation
 
 ## 🚧 Next Steps
 

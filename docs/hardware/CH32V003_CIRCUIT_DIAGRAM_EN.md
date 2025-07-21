@@ -73,9 +73,10 @@ GND ─────────── LED-2 │3           4│ ──── Key
                     └─────────────┘
                     
 TLP785 Features:
-- Isolation voltage: 5000Vrms
-- Forward current: 20mA (typ)
-- Output current: 100mA max
+- Isolation voltage: 2500Vrms (complete input-output isolation)
+- Switching voltage: 55V max (collector-emitter)
+- Switching current: 50mA max (sufficient for radio key input)
+- Input forward current: 20mA (typ)
 - Response time: 18μs (typ)
 - DIP-4 package
 
@@ -83,6 +84,11 @@ Calculation:
 Forward voltage VF = 1.2V (typ)
 Forward current IF = (3.3V - 1.2V) / 1kΩ = 2.1mA
 → Sufficient drive current secured
+
+Amateur Radio Compatibility:
+- Typical radio key input voltage: 5-12V (55V capability provides ample safety margin)
+- Typical radio key input current: <10mA (50mA capability provides headroom)
+- Isolation: Complete MCU-radio separation ensures safety
 ```
 
 ### Sidetone Circuit
