@@ -154,10 +154,10 @@ pub struct KeyerConfig {
 impl Default for KeyerConfig {
     fn default() -> Self {
         Self {
-            mode: KeyerMode::ModeB,
+            mode: KeyerMode::ModeA,  // Changed to ModeA for better compatibility
             char_space_enabled: true,
             unit: Duration::from_millis(60), // 20 WPM
-            debounce_ms: 10,
+            debounce_ms: 10,  // 10ms debounce for practical noise immunity
             queue_size: 64,
         }
     }

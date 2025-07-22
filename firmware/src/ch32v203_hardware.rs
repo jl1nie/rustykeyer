@@ -103,7 +103,7 @@ impl Ch32v203KeyerHal {
 /// Dit paddle input pin (PA0)
 pub struct DitInputPin {
     pressed: AtomicBool,
-    last_edge: AtomicU32,
+    last_edge: AtomicU32,  // Milliseconds since boot (power optimized)
     debounce_ms: u32,
 }
 
@@ -129,9 +129,9 @@ impl DitInputPin {
     /// Called from EXTI0 interrupt handler (both edges)
     pub fn on_interrupt(&self, pressed: bool) {
         self.pressed.store(pressed, Ordering::Relaxed);
-        // Store timestamp as microseconds since boot
-        let now_us = Instant::now().as_micros() as u32;
-        self.last_edge.store(now_us, Ordering::Relaxed);
+        // Store timestamp as milliseconds since boot (power optimized)
+        let now_ms = Instant::now().as_millis() as u32;
+        self.last_edge.store(now_ms, Ordering::Relaxed);
     }
 }
 
@@ -143,11 +143,11 @@ impl InputPaddle for DitInputPin {
     }
     
     fn last_edge_time(&self) -> Option<Instant> {
-        let edge_us = self.last_edge.load(Ordering::Relaxed);
-        if edge_us == 0 {
+        let edge_ms = self.last_edge.load(Ordering::Relaxed);
+        if edge_ms == 0 {
             None
         } else {
-            Some(Instant::from_micros(edge_us as u64))
+            Some(Instant::from_millis(edge_ms as u64))
         }
     }
     
@@ -168,7 +168,7 @@ impl InputPaddle for DitInputPin {
 /// Dah paddle input pin (PA1)
 pub struct DahInputPin {
     pressed: AtomicBool,
-    last_edge: AtomicU32,
+    last_edge: AtomicU32,  // Milliseconds since boot (power optimized)
     debounce_ms: u32,
 }
 
@@ -194,9 +194,9 @@ impl DahInputPin {
     /// Called from EXTI1 interrupt handler (both edges)
     pub fn on_interrupt(&self, pressed: bool) {
         self.pressed.store(pressed, Ordering::Relaxed);
-        // Store timestamp as microseconds since boot
-        let now_us = Instant::now().as_micros() as u32;
-        self.last_edge.store(now_us, Ordering::Relaxed);
+        // Store timestamp as milliseconds since boot (power optimized)
+        let now_ms = Instant::now().as_millis() as u32;
+        self.last_edge.store(now_ms, Ordering::Relaxed);
     }
 }
 
@@ -208,11 +208,11 @@ impl InputPaddle for DahInputPin {
     }
     
     fn last_edge_time(&self) -> Option<Instant> {
-        let edge_us = self.last_edge.load(Ordering::Relaxed);
-        if edge_us == 0 {
+        let edge_ms = self.last_edge.load(Ordering::Relaxed);
+        if edge_ms == 0 {
             None
         } else {
-            Some(Instant::from_micros(edge_us as u64))
+            Some(Instant::from_millis(edge_ms as u64))
         }
     }
     

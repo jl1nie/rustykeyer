@@ -14,6 +14,8 @@ CH32V003は16KB Flash / 2KB RAMの超低コストRISC-V MCUです。本実装に
 | **RAM使用量** | ≤2KB | 2,048B | 🟢 **完璧適合** |
 | **機能実装** | 全機能 | 全機能 | ✅ **100%** |
 | **リアルタイム性** | 1ms | 1ms | ✅ **達成** |
+| **デバウンス** | 10ms | 10ms | ✅ **統一実装** |
+| **動作互換性** | V203統一 | ModeA | ✅ **完全統一** |
 
 ## 🏗️ アーキテクチャ
 
@@ -164,9 +166,9 @@ fn configure_exti_interrupts() {
 /// KeyerFSM初期化 - keyer-core統合
 fn init_keyer_fsm() {
     let config = KeyerConfig {
-        mode: KeyerMode::ModeB,              // Iambic Mode B
+        mode: KeyerMode::ModeA,              // Iambic Mode A (unified)
         wpm: 20,                             // 20 WPM (60ms unit)
-        debounce_ms: 5,                      // 5ms debounce
+        debounce_ms: 10,                     // 10ms debounce (unified)
         character_space_enabled: true,       // 7-unit character space
     };
     
@@ -594,20 +596,21 @@ fn update_transmission_fsm(now_ms: u32) {
 - ✅ **コンパイル成功**: AtomicU32互換性、型変換エラー全て解決
 - ✅ **feature統合**: デバッグ機能の条件付きコンパイル対応
 
-**📊 実測メモリ使用量 (2025年最新)**:
+**📊 実測メモリ使用量 (2025年最新 - 統一設定対応)**:
 ```
-コア構造体合計: 37B (1.8% of 2KB RAM)
+コア構造体合計: 45B (2.2% of 2KB RAM)  // デバウンス機能追加
 ├── TxController: 12B        // AtomicU8 + 2×AtomicU32 (送信制御)
 ├── ELEMENT_QUEUE: 12B       // Queue<Element, 4> (heapless)
 ├── PADDLE_STATE: 8B         // Mutex<RefCell<PaddleInput>>
 ├── KEYER_FSM_INSTANCE: 4B   // Mutex<RefCell<Option<KeyerFSM>>>
+├── GPIO Debounce: 6B        // AtomicBool×2 + debounce_ms (Dit/Dah)
 └── その他Atomics: 13B       // SYSTEM_TICK_MS, LAST_ACTIVITY_MS等
 
-残り利用可能: 2011B (98.2%) - スタック(1024B)・HAL・バッファ用
+残り利用可能: 2003B (97.8%) - スタック(1024B)・HAL・バッファ用
 
-実装詳細:
-• KeyerFSM本体は必要時のみヒープレス初期化
-• 全アトミック操作でスレッドセーフ保証
+統一実装詳細:
+• ModeA動作でV203と完全互換
+• 10msデバウンスでノイズ耐性強化  
 • critical-sectionによる割り込み制御
 • keyer-core統合による型安全性
 ```

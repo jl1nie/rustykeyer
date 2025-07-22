@@ -27,15 +27,15 @@ pub mod hal;          // HAL抽象化
 ```rust
 use keyer_core::*;
 
-// デフォルト設定（20 WPM、Mode B）
+// デフォルト設定（20 WPM、Mode A - 統一設定）
 let config = keyer_core::default_config();
 
 // カスタム設定
 let config = KeyerConfig {
-    mode: KeyerMode::SuperKeyer,
+    mode: KeyerMode::ModeA,  // 統一デフォルト（最新推奨）  // 統一デフォルト（V203/V003互換）
     unit: Duration::from_millis(60), // 20 WPM
     char_space_enabled: true,
-    debounce_ms: 5,
+    debounce_ms: 10,  // 統一デバウンス（実用的ノイズ耐性）
     queue_size: 4, // 小容量MCU用
 };
 
@@ -245,7 +245,7 @@ impl Duration {
 // - 初心者・精密制御向け
 
 let config = KeyerConfig {
-    mode: KeyerMode::ModeA,
+    mode: KeyerMode::ModeA,  // 統一デフォルト（最新推奨）
     // その他設定...
 };
 ```

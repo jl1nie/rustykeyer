@@ -27,15 +27,15 @@ pub mod hal;          // HAL abstraction
 ```rust
 use keyer_core::*;
 
-// Default configuration (20 WPM, Mode B)
+// Default configuration (20 WPM, Mode A - Unified settings)
 let config = keyer_core::default_config();
 
 // Custom configuration
 let config = KeyerConfig {
-    mode: KeyerMode::SuperKeyer,
+    mode: KeyerMode::ModeA,  // Unified default (latest recommended)  // Unified default (V203/V003 compatible)
     unit: Duration::from_millis(60), // 20 WPM
     char_space_enabled: true,
-    debounce_ms: 5,
+    debounce_ms: 10,  // Unified debounce (practical noise immunity)
     queue_size: 4, // For low-memory MCUs
 };
 
@@ -245,7 +245,7 @@ impl Duration {
 // - For beginners and precise control
 
 let config = KeyerConfig {
-    mode: KeyerMode::ModeA,
+    mode: KeyerMode::ModeA,  // Unified default (latest recommended)
     // Other settings...
 };
 ```

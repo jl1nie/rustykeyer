@@ -35,10 +35,10 @@ async fn main(spawner: Spawner) {
 
     // Initialize keyer configuration - optimized for RAM
     let config = KeyerConfig {
-        mode: KeyerMode::SuperKeyer,
+        mode: KeyerMode::ModeA,  // Unified to ModeA for compatibility
         char_space_enabled: true,
         unit: Duration::from_millis(60), // 20 WPM
-        debounce_ms: 5, // Reduced debounce
+        debounce_ms: 10, // Unified 10ms debounce for noise immunity
         queue_size: 8,  // Match actual queue size
     };
     #[cfg(feature = "defmt")]

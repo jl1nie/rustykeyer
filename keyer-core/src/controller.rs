@@ -30,7 +30,7 @@ impl PaddleInput {
     /// This function is safe to call from interrupt context
     pub fn update(&self, side: PaddleSide, state: bool, now_ms: u32) {
         let now = now_ms;
-        let debounce_ms = 0; // Use 0ms debounce for tests
+        let debounce_ms = 10; // Use 10ms debounce for realistic testing
         
         match side {
             PaddleSide::Dit => {

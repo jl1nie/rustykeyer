@@ -211,10 +211,10 @@ macro_rules! tx_debug {
 fn initialize_keyer_fsm() {
     critical_section::with(|cs| {
         let config = KeyerConfig {
-            mode: KeyerMode::ModeB,
+            mode: KeyerMode::ModeA,  // Unified to ModeA for compatibility
             char_space_enabled: true,
             unit: Duration::from_millis(60),
-            debounce_ms: 5,
+            debounce_ms: 10,  // Unified 10ms debounce for noise immunity
             queue_size: 4,
         };
         let fsm = KeyerFSM::new(config);
@@ -223,7 +223,7 @@ fn initialize_keyer_fsm() {
     info!("🎛️ Keyer FSM initialized");
 }
 
-/// CH32V003 GPIO Input implementation with real register access
+/// CH32V003 GPIO Input implementation with real register access and debouncing
 struct Ch32v003Input {
     /// GPIO port base address
     port: u32,
@@ -231,6 +231,10 @@ struct Ch32v003Input {
     pin: u8,
     /// Last edge time
     last_edge: AtomicU32,
+    /// Last stable state for debouncing
+    last_stable_state: AtomicBool,
+    /// Debounce time in milliseconds
+    debounce_ms: u32,
 }
 
 impl Ch32v003Input {
@@ -239,13 +243,31 @@ impl Ch32v003Input {
             port,
             pin,
             last_edge: AtomicU32::new(0),
+            last_stable_state: AtomicBool::new(true), // Default to released (high)
+            debounce_ms: 10, // 10ms debounce for noise immunity
         }
     }
     
     fn is_low(&self) -> bool {
-        // Read GPIO IDR (Input Data Register) at offset 0x08
+        // Read current GPIO state
         let idr = unsafe { core::ptr::read_volatile((self.port + 0x08) as *const u32) };
-        (idr & (1 << self.pin)) == 0 // Active low
+        let current_raw = (idr & (1 << self.pin)) == 0; // Active low
+        
+        // Get timing information
+        let now_ms = SYSTEM_TICK_MS.load(Ordering::Relaxed);
+        let last_edge_ms = self.last_edge.load(Ordering::Relaxed);
+        let last_stable = self.last_stable_state.load(Ordering::Relaxed);
+        
+        // If enough time has passed since last edge, update stable state
+        if now_ms.saturating_sub(last_edge_ms) >= self.debounce_ms {
+            if current_raw != last_stable {
+                self.last_stable_state.store(current_raw, Ordering::Relaxed);
+                return current_raw;
+            }
+        }
+        
+        // Return last stable state during debounce period
+        last_stable
     }
     
     /// Called from EXTI interrupt handler
