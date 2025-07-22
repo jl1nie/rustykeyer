@@ -16,6 +16,8 @@
 > - 2025-01-21: HAL抽象化層の詳細設計を追加（700行拡張）
 > - 2025-01-21: ホスト環境テスト設計を追加（800行拡張）
 > - 2025-01-21: **実装完了** - 全コンポーネントの実装とコンパイル検証完了
+> - 2025-01-22: **統一設定実装** - ModeA統一、10ms debounce、CH32V003/V203両対応
+> - 2025-01-22: **分離FSMアーキテクチャ** - Keyer FSM + 送信FSM分離、実測メモリ使用量更新
 
 ## 1. アーキテクチャ概要
 
@@ -44,8 +46,9 @@
 ├─────────────────────────────────────────────────────┤
 │                   Hardware Layer                     │
 ├─────────────────────────────────────────────────────┤
-│  PA0: Dit Input   PA1: Dah Input   PA2: Key Output  │
-│  (Pull-up, INT)   (Pull-up, INT)   (Push-pull)     │
+│ CH32V203: PA0(Dit) PA1(Dah) PA2(Key) - Embassy Async│
+│ CH32V003: PA2(Dit) PA3(Dah) PD6(Key) - Bare Metal   │
+│  (Pull-up, EXTI)  (Pull-up, EXTI)  (Push-pull)     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -101,21 +104,24 @@ Paddle Press/Release
 └─────────────────────────────────────────┘
 ```
 
-#### メモリアーキテクチャ
+#### メモリアーキテクチャ (実測値 2025-01-22)
 ```
-Static Memory Layout:
-┌────────────────────┐ 0x2000_0000 (RAM Start)
-│   Stack (512B)     │
+CH32V203 (Embassy): Flash 6.4KB, RAM 20KB
+┌────────────────────┐ Embassy async runtime
+│   Task Stacks      │ evaluator + sender tasks
+│  - Dynamic alloc   │ ← Embassy heap management
 ├────────────────────┤
-│  Static Variables  │
-│  - PADDLE          │ ← Global atomic state
-│  - KEY_QUEUE       │ ← StaticCell allocation
+│  Static Variables  │ PADDLE, KEY_QUEUE (64 elements)
+└────────────────────┘
+
+CH32V003 (Bare Metal): Flash 2.9KB, RAM 2KB
+┌────────────────────┐ 0x2000_0000 (RAM Start)  
+│   Stack (1024B)    │ Main execution stack
 ├────────────────────┤
-│   Task Stacks      │
-│  - evaluator: 256B │
-│  - sender: 128B    │
-├────────────────────┤
-│     Heap: None     │ ← no_std environment
+│  Static (45B)      │ TxController, PADDLE, QUEUE(4)
+│  - Atomic states   │ ← Critical section protected
+├────────────────────┤ 
+│  BSS (979B)        │ Other variables & buffers
 └────────────────────┘ 0x2000_0800 (RAM End)
 ```
 
@@ -455,10 +461,13 @@ Dah:  |▔▔▔▔▔▔▔▔▔|___|  (3 units ON, 1 unit OFF)
 - FSM内での条件分岐追加
 - 既存構造を維持したまま拡張可能
 
-### 5.2 設定可能項目
-- **unit時間**: Duration型で可変（WPM対応）
-- **CharSpace**: ON/OFF切り替え可能
-- **キューサイズ**: コンパイル時定数（現在64）
+### 5.2 統一設定標準 (2025-01-22更新)
+- **デフォルトモード**: ModeA（V203/V003両対応、最高互換性）
+- **デバウンス時間**: 10ms統一（実用的ノイズ耐性）
+- **時間精度**: 1ms統一（V203で消費電力最適化）
+- **unit時間**: Duration::from_millis(60) = 20WPM
+- **CharSpace**: デフォルトON（利便性重視）
+- **キューサイズ**: V003=4, V203=64（メモリ制約対応）
 
 ### 5.3 ハードウェア抽象化
 - `embedded_hal` トレイトによるピン抽象化
@@ -1046,7 +1055,7 @@ fn create_test_fsm(mode: KeyerMode) -> TestFSM {
     TestFSM::new(KeyerConfig {
         mode,
         char_space_enabled: false,
-        unit: Duration::from_micros(60_000), // 60ms = 20WPM
+        unit: Duration::from_millis(60), // 60ms = 20WPM (unified timing)
     })
 }
 ```
