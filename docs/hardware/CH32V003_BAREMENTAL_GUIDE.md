@@ -131,7 +131,7 @@ fn hardware_init() {
     configure_pwm_sidetone();    // PA1 TIM1_CH1, 50%デューティ
     
     // 6. KeyerFSM初期化 (keyer-core統合)
-    init_keyer_fsm();           // Mode B, 20WPM, 5ms debounce
+    init_keyer_fsm();           // Mode A, 20WPM, 10ms debounce (unified)
 }
 
 /// EXTI両エッジ検出設定 - 新分離FSM対応
@@ -166,9 +166,9 @@ fn configure_exti_interrupts() {
 /// KeyerFSM初期化 - keyer-core統合
 fn init_keyer_fsm() {
     let config = KeyerConfig {
-        mode: KeyerMode::ModeA,              // Iambic Mode A (unified)
+        mode: KeyerMode::ModeA,              // Unified Mode A (V203/V003 compatible)
         wpm: 20,                             // 20 WPM (60ms unit)
-        debounce_ms: 10,                     // 10ms debounce (unified)
+        debounce_ms: 10,                     // Unified 10ms debounce (noise immunity)
         character_space_enabled: true,       // 7-unit character space
     };
     
