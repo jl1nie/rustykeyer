@@ -10,7 +10,7 @@ CH32V003は16KB Flash / 2KB RAMの超低コストRISC-V MCUです。本実装に
 
 | 目標項目 | 制約値 | 実測値 | 達成率 |
 |----------|--------|--------|--------|
-| **Flash使用量** | <4KB | 1,070B | 🟢 **73%削減** |
+| **Flash使用量** | <4KB | 2,984B | 🟢 **81%達成** |
 | **RAM使用量** | ≤2KB | 2,048B | 🟢 **完璧適合** |
 | **機能実装** | 全機能 | 全機能 | ✅ **100%** |
 | **リアルタイム性** | 1ms | 1ms | ✅ **達成** |
@@ -441,10 +441,10 @@ SysTick精度: 1ms ±0.1ms
 ### メモリ使用効率
 ```
 Flash効率:
-├── Code: 800B (75%)
-├── Constants: 200B (19%) 
-├── Vectors: 64B (6%)
-└── 残り: 14.9KB (93%未使用)
+├── Code: 2,984B (18.6%)
+├── Data: 16B (0.1%)
+├── Reserved: 64B (0.4%)
+└── 残り: 13KB (81.4%未使用)
 
 RAM効率:
 ├── Stack: 1024B (50%) - 関数呼び出し
@@ -463,9 +463,9 @@ cd firmware-ch32v003
 cargo build --release
 
 # バイナリサイズ確認 (パッケージ名: rustykeyer-ch32v003, バイナリ名: keyer-v003)
-riscv32-unknown-elf-size target/riscv32imc-unknown-none-elf/release/keyer-v003
+cargo size --bin keyer-v003 --release -p rustykeyer-ch32v003
 #    text    data     bss     dec     hex filename
-#    3200       0    2048    5248    1480 keyer-v003
+#    2984      16    2032    5032    13a8 keyer-v003
 ```
 
 ### 2. 書き込み準備
@@ -629,7 +629,7 @@ fn update_transmission_fsm(now_ms: u32) {
 
 | **項目** | **CH32V003** | **CH32V203** | **用途** |
 |:--------:|:------------:|:------------:|:--------:|
-| **Flash** | 16KB | 64KB | V003: コスト優先 |
+| **Flash** | 16KB (2.9KB使用) | 64KB (6.4KB使用) | V003: コスト優先 |
 | **RAM** | 2KB | 20KB | V203: 機能優先 |
 | **Dit Pin** | PA2 (EXTI2) | PA0 (EXTI0) | 異なるピン配置 |
 | **Dah Pin** | PA3 (EXTI3) | PA1 (EXTI1) | 異なるピン配置 |

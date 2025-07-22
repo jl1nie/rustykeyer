@@ -282,9 +282,10 @@ let config = KeyerConfig {
 
 ### Memory Usage
 ```
-Flash Usage: ~800B-3KB (varies by mode & features)
-RAM Usage: ~16-64B (varies by queue size)
+Flash Usage: 2.9KB-6.4KB (varies by platform & features)
+RAM Usage: 2KB-20KB (V003: 2KB, V203: 20KB)
 Stack Usage: ~256-512B (function call depth)
+Efficiency: V003 18.6%, V203 10.2% (Flash utilization)
 ```
 
 ### Timing Accuracy
